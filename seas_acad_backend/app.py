@@ -1,13 +1,23 @@
 from flask import Flask, jsonify, request
-import psycopg2
+import pymysql
 import os
 
 app = Flask(__name__)
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Get connection details from environment variables
+DB_HOST = os.getenv("DB_HOST", "tardoimy.bluehostmysql.com")
+DB_NAME = os.getenv("DB_NAME", "tardoimy_seas_backend")
+DB_USER = os.getenv("DB_USER", "tardoimy_seas_user")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "Awuye@alpha247")
 
 def get_db_connection():
-    conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+    conn = pymysql.connect(
+        host=DB_HOST,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
+        cursorclass=pymysql.cursors.DictCursor
+    )
     return conn
 
 @app.route("/")
@@ -17,27 +27,22 @@ def home():
 @app.route("/courses", methods=["GET"])
 def get_courses():
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, title, description, video_url, pdf_url FROM courses;")
-    rows = cur.fetchall()
-    cur.close()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, title, description, video_url, pdf_url FROM courses;")
+        rows = cur.fetchall()
     conn.close()
-    return jsonify([
-        {"id": r[0], "title": r[1], "description": r[2], "video_url": r[3], "pdf_url": r[4]}
-        for r in rows
-    ])
+    return jsonify(rows)
 
 @app.route("/add_course", methods=["POST"])
 def add_course():
     data = request.get_json()
     conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO courses (title, description, video_url, pdf_url) VALUES (%s, %s, %s, %s)",
-        (data["title"], data["description"], data["video_url"], data["pdf_url"])
-    )
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO courses (title, description, video_url, pdf_url) VALUES (%s, %s, %s, %s)",
+            (data["title"], data["description"], data["video_url"], data["pdf_url"])
+        )
     conn.commit()
-    cur.close()
     conn.close()
     return jsonify({"status": "success"}), 201
 
