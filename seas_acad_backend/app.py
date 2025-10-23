@@ -4,13 +4,17 @@ import os
 
 app = Flask(__name__)
 
-# Get connection details from environment variables
-DB_HOST = os.getenv("DB_HOST", "tardoimy.bluehostmysql.com")
-DB_NAME = os.getenv("DB_NAME", "tardoimy_seas_backend")
-DB_USER = os.getenv("DB_USER", "tardoimy_seas_user")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "Awuye@alpha247")
+# ✅ Load all database credentials securely from Render environment variables
+DB_HOST = os.getenv("DB_HOST")
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 def get_db_connection():
+    # Ensure all required environment variables are set
+    if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
+        raise Exception("Database configuration missing — check environment variables.")
+    
     conn = pymysql.connect(
         host=DB_HOST,
         user=DB_USER,
@@ -54,10 +58,9 @@ def test_db():
             cur.execute("SELECT NOW();")
             result = cur.fetchone()
         conn.close()
-        return jsonify({"status": "connected", "db_time": result[0]})
+        return jsonify({"status": "connected", "db_time": result})
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
