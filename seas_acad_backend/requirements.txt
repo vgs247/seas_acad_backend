@@ -1,5 +1,7 @@
 flask
 gunicorn
-psycopg2-binary
 pymysql
+flask-cors
+pyjwt
+werkzeug
 cryptography
