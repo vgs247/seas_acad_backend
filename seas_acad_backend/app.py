@@ -46,5 +46,18 @@ def add_course():
     conn.close()
     return jsonify({"status": "success"}), 201
 
+@app.route("/test_db")
+def test_db():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT NOW();")
+            result = cur.fetchone()
+        conn.close()
+        return jsonify({"status": "connected", "db_time": result[0]})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
