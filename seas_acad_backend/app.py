@@ -39,7 +39,7 @@ def get_db_connection():
 # --- Auth helpers ---
 def create_token(user_id, username):
     payload = {
-        "sub": user_id,
+        "sub": str(user_id),  #convert user_id to string
         "username": username,
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXP_HOURS)
     }
