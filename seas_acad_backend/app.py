@@ -37,13 +37,15 @@ def get_db_connection():
     return conn
 
 # --- Auth helpers ---
-def create_token(user_id, username):
+def create_token(user_id, username, is_admin=False):
     payload = {
-        "sub": str(user_id),  #convert user_id to string
+        "sub": user_id,
         "username": username,
+        "is_admin": is_admin,
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXP_HOURS)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
 
 def decode_token(token):
     return jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
@@ -53,18 +55,27 @@ def login_required(f):
     def decorated(*args, **kwargs):
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
-            return jsonify({"message":"Missing or invalid Authorization header"}), 401
+            return jsonify({"message": "Missing or invalid Authorization header"}), 401
+        
         token = auth.split(" ", 1)[1].strip()
         try:
             payload = decode_token(token)
-            g.user_id = payload["sub"]
+            
+            # Convert ID to integer to match your admin check
+            g.user_id = int(payload["sub"]) if "sub" in payload else None
             g.username = payload.get("username")
+            
+            # Optional — support admin flag in token
+            g.is_admin = payload.get("is_admin", False)
+            
         except jwt.ExpiredSignatureError:
-            return jsonify({"message":"Token expired"}), 401
+            return jsonify({"message": "Token expired"}), 401
         except Exception as e:
-            return jsonify({"message":"Invalid token", "error": str(e)}), 401
+            return jsonify({"message": "Invalid token", "error": str(e)}), 401
+        
         return f(*args, **kwargs)
     return decorated
+
 
 # --- Utility: run a query convenience ---
 def run_query(query, params=None, fetchone=False, fetchall=False, commit=False):
@@ -123,10 +134,12 @@ def login():
     if not username or not password:
         return jsonify({"message":"username and password required"}), 400
 
-    user = run_query("SELECT id, username, password_hash FROM users WHERE username=%s", (username,), fetchone=True)
+    user = run_query("SELECT id, username, password_hash, is_admin FROM users WHERE username=%s", (username,), fetchone=True)
     if not user or not check_password_hash(user["password_hash"], password):
         return jsonify({"message":"invalid credentials"}), 401
-    token = create_token(user["id"], user["username"])
+    is_admin = (user["id"] == 1)
+    token = create_token(user["id"], user["username"], is_admin=user["is_admin"])
+
     return jsonify({"token": token, "user_id": user["id"], "username": user["username"]})
 
 # --- Courses CRUD (Admin endpoints protected by JWT for simplicity) ---
@@ -152,8 +165,9 @@ def get_course(course_id):
 @login_required
 def add_course():
     # simple admin gate: only user with id==1 is admin in this example; you should implement a real role system
-    if g.user_id != 1:
-        return jsonify({"message":"admin only"}), 403
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+
     data = request.get_json() or {}
     required = ["title","description","duration","total_modules","amount","category"]
     for r in required:
@@ -173,8 +187,9 @@ def add_course():
 @app.route("/api/courses/<int:course_id>", methods=["PUT","PATCH"])
 @login_required
 def update_course(course_id):
-    if g.user_id != 1:
-        return jsonify({"message":"admin only"}), 403
+    if not getattr(g, "is_admin", False):
+       return jsonify({"message": "admin only"}), 403
+
     data = request.get_json() or {}
     # build dynamic update
     fields = []
@@ -193,8 +208,9 @@ def update_course(course_id):
 @app.route("/api/courses/<int:course_id>", methods=["DELETE"])
 @login_required
 def delete_course(course_id):
-    if g.user_id != 1:
-        return jsonify({"message":"admin only"}), 403
+    if not getattr(g, "is_admin", False):
+       return jsonify({"message": "admin only"}), 403
+
     run_query("DELETE FROM courses WHERE id=%s", (course_id,), commit=True)
     return jsonify({"message":"deleted"})
 
@@ -212,8 +228,9 @@ def featured_courses():
 @app.route("/api/featured", methods=["POST"])
 @login_required
 def set_featured():
-    if g.user_id != 1:
-        return jsonify({"message":"admin only"}), 403
+    if not getattr(g, "is_admin", False):
+       return jsonify({"message": "admin only"}), 403
+
     data = request.get_json() or {}
     course_id = data.get("course_id")
     if not course_id:
@@ -230,8 +247,9 @@ def get_modules(course_id):
 @app.route("/api/modules", methods=["POST"])
 @login_required
 def add_module():
-    if g.user_id != 1:
-        return jsonify({"message":"admin only"}), 403
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+
     data = request.get_json() or {}
     required = ["course_id","module_number","module_title"]
     for r in required:
