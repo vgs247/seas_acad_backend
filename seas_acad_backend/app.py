@@ -109,7 +109,7 @@ def register():
     try:
         query = """
             INSERT INTO users (first_name, last_name, username, country, phone_number, email, password_hash)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         run_query(query, (
             data.get("first_name"),
