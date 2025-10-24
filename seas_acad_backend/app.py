@@ -39,12 +39,13 @@ def get_db_connection():
 # --- Auth helpers ---
 def create_token(user_id, username, is_admin=False):
     payload = {
-        "sub": user_id,
+        "sub": str(user_id),  #convert to string
         "username": username,
         "is_admin": is_admin,
         "exp": datetime.utcnow() + timedelta(hours=JWT_EXP_HOURS)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
 
 
 def decode_token(token):
