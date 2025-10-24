@@ -108,12 +108,11 @@ def register():
     password_hash = generate_password_hash(data["password"])
     try:
         query = """
-            INSERT INTO users (first_name, middle_name, last_name, username, country, phone_number, email, password_hash)
+            INSERT INTO users (first_name, last_name, username, country, phone_number, email, password_hash)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """
         run_query(query, (
             data.get("first_name"),
-            data.get("middle_name"),
             data.get("last_name"),
             data.get("username"),
             data.get("country"),
