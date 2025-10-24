@@ -319,6 +319,41 @@ def update_course_progress(course_id):
     run_query("UPDATE user_courses SET progress=%s WHERE user_id=%s AND course_id=%s", (progress, g.user_id, course_id), commit=True)
     return jsonify({"message":"updated"})
 
+
+@app.route("/api/admins", methods=["POST"])
+@login_required
+def add_admin():
+    # ✅ Only admins can create other admins
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+
+    data = request.get_json() or {}
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        return jsonify({"message": "username and password required"}), 400
+
+    # Check if username already exists
+    existing = run_query("SELECT id FROM users WHERE username=%s", (username,), fetchone=True)
+    if existing:
+        return jsonify({"message": "username already exists"}), 400
+
+    # Hash the password
+    password_hash = generate_password_hash(password)
+
+    # Create new admin account
+    run_query(
+        "INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, %s)",
+        (username, password_hash, True),
+        commit=True
+    )
+
+    return jsonify({"message": "Admin account created successfully"}), 201
+
+
+
+
 # --- Optional: helper to create admin user if none exists ---
 @app.route("/api/setup_admin", methods=["POST"])
 def setup_admin():
