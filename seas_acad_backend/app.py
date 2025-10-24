@@ -132,16 +132,34 @@ def login():
     data = request.get_json() or {}
     username = data.get("username")
     password = data.get("password")
+
     if not username or not password:
-        return jsonify({"message":"username and password required"}), 400
+        return jsonify({"message": "username and password required"}), 400
 
-    user = run_query("SELECT id, username, password_hash, is_admin FROM users WHERE username=%s", (username,), fetchone=True)
+    # Fetch user info (with is_admin)
+    user = run_query(
+        "SELECT id, username, password_hash, is_admin FROM users WHERE username=%s",
+        (username,),
+        fetchone=True
+    )
+
+    # Invalid username or password
     if not user or not check_password_hash(user["password_hash"], password):
-        return jsonify({"message":"invalid credentials"}), 401
-    is_admin = (user["id"] == 1)
-    token = create_token(user["id"], user["username"], is_admin=user["is_admin"])
+        return jsonify({"message": "invalid credentials"}), 401
 
-    return jsonify({"token": token, "user_id": user["id"], "username": user["username"]})
+    # Default is_admin=False if missing
+    is_admin = bool(user.get("is_admin", False))
+
+    # Create JWT token
+    token = create_token(str(user["id"]), user["username"], is_admin=is_admin)
+
+    return jsonify({
+        "token": token,
+        "user_id": user["id"],
+        "username": user["username"],
+        "is_admin": is_admin
+    })
+
 
 # --- Courses CRUD (Admin endpoints protected by JWT for simplicity) ---
 @app.route("/api/courses", methods=["GET"])
