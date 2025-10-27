@@ -3,10 +3,15 @@ from flask import Flask, request, jsonify, g
 from flask_cors import CORS
 import pymysql
 import os
+import ftplib
 from werkzeug.security import generate_password_hash, check_password_hash
 import jwt
 from functools import wraps
 from datetime import datetime, timedelta
+from werkzeug.utils import secure_filename
+from uuid import uuid4
+from flask import current_app
+
 
 # --- Configuration ---
 DB_HOST = os.getenv("DB_HOST")
@@ -340,7 +345,7 @@ def update_course_progress(course_id):
 @app.route("/api/admins", methods=["POST"])
 @login_required
 def add_admin():
-    # ✅ Only admins can create other admins
+    # Only admins can create other admins
     if not getattr(g, "is_admin", False):
         return jsonify({"message": "admin only"}), 403
 
@@ -371,6 +376,193 @@ def add_admin():
 
 
 
+ALLOWED_UPLOAD_EXT = {"png","jpg","jpeg","gif","pdf"}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.',1)[1].lower() in ALLOWED_UPLOAD_EXT
+
+def upload_file_to_bluehost(local_path, remote_filename):
+    ftp_host = os.getenv("FTP_HOST")
+    ftp_user = os.getenv("FTP_USER")
+    ftp_pass = os.getenv("FTP_PASS")
+    remote_dir = os.getenv("UPLOAD_REMOTE_DIR", "public_html/uploads/profile_pics")
+
+    ftp = ftplib.FTP(ftp_host, timeout=30)
+    ftp.login(ftp_user, ftp_pass)
+    # change to uploads directory (ensure this exists on Bluehost)
+    ftp.cwd(remote_dir)
+    with open(local_path, "rb") as f:
+        ftp.storbinary(f"STOR {remote_filename}", f)
+    ftp.quit()
+
+    base_url = os.getenv("BASE_FILE_URL")  # e.g. https://seasecurity.tech/uploads/profile_pics/
+    return f"{base_url.rstrip('/')}/{remote_filename}"
+
+@app.route("/api/upload-course-image", methods=["POST"])
+@login_required
+def upload_profile_pic():
+    if "profile_pic" not in request.files:
+        return jsonify({"message":"No file part"}), 400
+    file = request.files["profile_pic"]
+    if file.filename == "":
+        return jsonify({"message":"No selected file"}), 400
+    if not allowed_file(file.filename):
+        return jsonify({"message":"File type not allowed"}), 400
+
+    # secure a unique filename
+    ext = file.filename.rsplit(".",1)[1].lower()
+    filename = secure_filename(f"user_{g.user_id}_{uuid4().hex}.{ext}")
+    local_tmp = os.path.join("/tmp", filename)
+    try:
+        file.save(local_tmp)
+
+        # upload via FTP to Bluehost
+        public_url = upload_file_to_bluehost(local_tmp, filename)
+
+        # update DB: set users.profile_pic = public_url (or relative path)
+        run_query("UPDATE users SET profile_pic=%s WHERE id=%s", (public_url, g.user_id), commit=True)
+
+        return jsonify({"message":"uploaded", "url": public_url}), 201
+    except Exception as e:
+        current_app.logger.exception("Upload failed")
+        return jsonify({"message":"upload failed", "error": str(e)}), 500
+    finally:
+        if os.path.exists(local_tmp):
+            try:
+                os.remove(local_tmp)
+            except Exception:
+                pass
+
+
+
+# -------------------------------
+# GET USER PROFILE
+# -------------------------------
+@app.route("/api/profile", methods=["GET"])
+@login_required
+def get_profile():
+    """Fetch current user's profile information"""
+    user = run_query(
+        "SELECT first_name, last_name, email, profile_pic FROM users WHERE id=%s",
+        (g.user_id,),
+        fetchone=True
+    )
+    if not user:
+        return jsonify({"message": "User not found"}), 404
+
+    full_name = f"{user['first_name']} {user['last_name']}".strip()
+    profile_pic_url = (
+        f"{request.host_url.rstrip('/')}/{user['profile_pic']}"
+        if user["profile_pic"] else None
+    )
+
+    return jsonify({
+        "full_name": full_name,
+        "email": user["email"],
+        "profile_pic": profile_pic_url
+    }), 200
+
+
+# -------------------------------
+# CHANGE PASSWORD
+# -------------------------------
+@app.route("/api/profile/change-password", methods=["POST"])
+@login_required
+def change_password():
+    """Change user's password"""
+    data = request.get_json() or {}
+    old_password = data.get("old_password")
+    new_password = data.get("new_password")
+    confirm_password = data.get("confirm_password")
+
+    if not old_password or not new_password or not confirm_password:
+        return jsonify({"message": "All password fields are required"}), 400
+
+    if new_password != confirm_password:
+        return jsonify({"message": "New passwords do not match"}), 400
+
+    # Verify old password
+    user = run_query(
+        "SELECT password_hash FROM users WHERE id=%s",
+        (g.user_id,),
+        fetchone=True
+    )
+    if not user or not check_password_hash(user["password_hash"], old_password):
+        return jsonify({"message": "Old password is incorrect"}), 401
+
+    # Update with new password
+    new_hash = generate_password_hash(new_password)
+    run_query(
+        "UPDATE users SET password_hash=%s WHERE id=%s",
+        (new_hash, g.user_id),
+        commit=True
+    )
+    return jsonify({"message": "Password changed successfully"}), 200
+
+
+# -------------------------------
+# UPDATE PROFILE INFO (NAME, EMAIL, PROFILE PIC)
+# -------------------------------
+@app.route("/api/profile/update", methods=["PUT"])
+@login_required
+def update_profile():
+    """Update user's full name, email, and profile picture"""
+    full_name = request.form.get("full_name")
+    email = request.form.get("email")
+    file = request.files.get("profile_pic")
+
+    if not full_name or not email:
+        return jsonify({"message": "Full name and email are required"}), 400
+
+    try:
+        # Split full name into first and last
+        name_parts = full_name.strip().split(" ", 1)
+        first_name = name_parts[0]
+        last_name = name_parts[1] if len(name_parts) > 1 else ""
+
+        profile_pic_path = None
+
+        # Handle image upload
+        if file and allowed_file(file.filename):
+            filename = secure_filename(f"user_{g.user_id}_" + file.filename)
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            file.save(filepath)
+            profile_pic_path = f"{UPLOAD_FOLDER}/{filename}"
+            
+            UPLOAD_FOLDER = "/public_html/uploads/profile_pics"
+            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+
+            # Update database with new image path
+            run_query(
+                "UPDATE users SET first_name=%s, last_name=%s, email=%s, profile_pic=%s WHERE id=%s",
+                (first_name, last_name, email, profile_pic_path, g.user_id),
+                commit=True
+            )
+        else:
+            # Update only name and email
+            run_query(
+                "UPDATE users SET first_name=%s, last_name=%s, email=%s WHERE id=%s",
+                (first_name, last_name, email, g.user_id),
+                commit=True
+            )
+
+        return jsonify({
+            "message": "Profile updated successfully",
+            "full_name": f"{first_name} {last_name}".strip(),
+            "email": email,
+            "profile_pic": profile_pic_path
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "message": "Error updating profile",
+            "error": str(e)
+        }), 500
+        
+        
+        
+
 # --- Optional: helper to create admin user if none exists ---
 @app.route("/api/setup_admin", methods=["POST"])
 def setup_admin():
@@ -394,4 +586,5 @@ def health():
 # --- Run ---
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "10000")))
-    app.run(debug=True)
+
+
