@@ -35,13 +35,20 @@ def upload_file_to_bluehost(local_path, remote_filename):
     ftp_host = os.getenv("FTP_HOST")
     ftp_user = os.getenv("FTP_USER")
     ftp_pass = os.getenv("FTP_PASS")
-    remote_dir = os.getenv("UPLOAD_REMOTE_DIR", "public_html/uploads/course_images")
+    remote_dir = os.getenv("UPLOAD_REMOTE_DIR", "uploads/course_images")  # relative to FTP root
 
     ftp = ftplib.FTP(ftp_host, timeout=30)
     ftp.login(ftp_user, ftp_pass)
 
-    # Ensure directory exists
-    for part in remote_dir.split("/"):
+    # Navigate to FTP root safely
+    try:
+        ftp.cwd("/")
+    except ftplib.error_perm:
+        # If root cannot be changed, we are already at FTP root
+        pass
+
+    # Create directories recursively if they don't exist
+    for part in remote_dir.strip("/").split("/"):
         if not part:
             continue
         try:
@@ -50,13 +57,15 @@ def upload_file_to_bluehost(local_path, remote_filename):
             ftp.mkd(part)
             ftp.cwd(part)
 
+    # Upload the file
     with open(local_path, "rb") as f:
-        ftp.storbinary(f"STOR {remote_filename}", f)
+        ftp.storbinary(f"STOR " + remote_filename, f)
+
     ftp.quit()
 
+    # Return the public URL
     base_url = os.getenv("BASE_FILE_URL", "https://seasecurity.tech/uploads/course_images")
     return f"{base_url.rstrip('/')}/{remote_filename}"
-
 
 # --- DB connection helper ---
 def get_db_connection():
