@@ -13,6 +13,7 @@ from uuid import uuid4
 from flask import current_app
 
 
+
 # --- Configuration ---
 DB_HOST = os.getenv("DB_HOST")
 DB_NAME = os.getenv("DB_NAME")
@@ -26,6 +27,7 @@ if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
     print("WARNING: Database environment variables not fully set.")
 
 app = Flask(__name__)
+UPLOAD_FOLDER = "uploads/profile_pics"
 CORS(app)  # allow cross-origin requests for your Flutter app
 
 # --- DB connection helper ---
@@ -184,28 +186,96 @@ def get_course(course_id):
     c["modules"] = modules
     return jsonify(c)
 
+
+ALLOWED_UPLOAD_EXT = {"png","jpg","jpeg","gif","pdf"}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.',1)[1].lower() in ALLOWED_UPLOAD_EXT
+
+def upload_file_to_bluehost(local_path, remote_filename):
+    ftp_host = os.getenv("FTP_HOST")
+    ftp_user = os.getenv("FTP_USER")
+    ftp_pass = os.getenv("FTP_PASS")
+    remote_dir = os.getenv("UPLOAD_REMOTE_DIR", "public_html/uploads/course_images")
+
+    ftp = ftplib.FTP(ftp_host, timeout=30)
+    ftp.login(ftp_user, ftp_pass)
+    # change to uploads directory (ensure this exists on Bluehost)
+    ftp.cwd(remote_dir)
+    with open(local_path, "rb") as f:
+        ftp.storbinary(f"STOR {remote_filename}", f)
+    ftp.quit()
+
+    base_url = os.getenv("BASE_FILE_URL")  # e.g. https://seasecurity.tech/uploads/profile_pics/
+    return f"{base_url.rstrip('/')}/{remote_filename}"
+
 @app.route("/api/courses", methods=["POST"])
 @login_required
 def add_course():
-    # simple admin gate: only user with id==1 is admin in this example; you should implement a real role system
+    """Admin-only: create a course and upload its image"""
     if not getattr(g, "is_admin", False):
         return jsonify({"message": "admin only"}), 403
 
-    data = request.get_json() or {}
-    required = ["title","description","duration","total_modules","amount","category"]
-    for r in required:
-        if r not in data:
-            return jsonify({"message": f"{r} required"}), 400
-    q = """
-      INSERT INTO courses (title, description, duration, total_modules, amount, category, course_image)
-      VALUES (%s,%s,%s,%s,%s,%s,%s)
-    """
-    run_query(q, (
-        data["title"], data["description"], data["duration"],
-        data["total_modules"], data["amount"], data["category"],
-        data.get("course_image")
-    ), commit=True)
-    return jsonify({"message":"created"}), 201
+    try:
+        # Use form-data for both text fields and file
+        title = request.form.get("title")
+        description = request.form.get("description")
+        duration = request.form.get("duration")
+        total_modules = request.form.get("total_modules")
+        amount = request.form.get("amount")
+        category = request.form.get("category")
+        file = request.files.get("file")
+
+        # Validate required fields
+        required = [title, description, duration, total_modules, amount, category]
+        if not all(required):
+            return jsonify({"message": "All fields are required"}), 400
+
+        # Insert the course first (no image yet)
+        query = """
+            INSERT INTO courses (title, description, duration, total_modules, amount, category)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """
+        run_query(query, (title, description, duration, total_modules, amount, category), commit=True)
+
+        # Retrieve the last inserted course ID
+        new_course = run_query("SELECT LAST_INSERT_ID() AS id", fetchone=True)
+        course_id = new_course["id"]
+
+        course_image = None
+        if file and file.filename:
+            allowed_extensions = {"jpg", "jpeg", "png"}
+            ext = file.filename.rsplit(".", 1)[-1].lower()
+            if ext not in allowed_extensions:
+                return jsonify({"message": "File type not allowed"}), 400
+
+            filename = secure_filename(f"course_{course_id}_{uuid4().hex}.{ext}")
+            local_tmp = os.path.join("/tmp", filename)
+            file.save(local_tmp)
+
+            # Upload to Bluehost FTP
+            course_image = upload_file_to_bluehost(local_tmp, f"course_images/{filename}")
+
+            # Update DB with image URL
+            run_query(
+                "UPDATE courses SET course_image=%s WHERE id=%s",
+                (course_image, course_id),
+                commit=True
+            )
+
+            # Remove temp file
+            if os.path.exists(local_tmp):
+                os.remove(local_tmp)
+
+        return jsonify({
+            "message": "Course created successfully",
+            "course_id": course_id,
+            "course_image": course_image
+        }), 201
+
+    except Exception as e:
+        current_app.logger.exception("Error creating course")
+        return jsonify({"message": "Error creating course", "error": str(e)}), 500
 
 @app.route("/api/courses/<int:course_id>", methods=["PUT","PATCH"])
 @login_required
@@ -376,65 +446,6 @@ def add_admin():
 
 
 
-ALLOWED_UPLOAD_EXT = {"png","jpg","jpeg","gif","pdf"}
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.',1)[1].lower() in ALLOWED_UPLOAD_EXT
-
-def upload_file_to_bluehost(local_path, remote_filename):
-    ftp_host = os.getenv("FTP_HOST")
-    ftp_user = os.getenv("FTP_USER")
-    ftp_pass = os.getenv("FTP_PASS")
-    remote_dir = os.getenv("UPLOAD_REMOTE_DIR", "public_html/uploads/profile_pics")
-
-    ftp = ftplib.FTP(ftp_host, timeout=30)
-    ftp.login(ftp_user, ftp_pass)
-    # change to uploads directory (ensure this exists on Bluehost)
-    ftp.cwd(remote_dir)
-    with open(local_path, "rb") as f:
-        ftp.storbinary(f"STOR {remote_filename}", f)
-    ftp.quit()
-
-    base_url = os.getenv("BASE_FILE_URL")  # e.g. https://seasecurity.tech/uploads/profile_pics/
-    return f"{base_url.rstrip('/')}/{remote_filename}"
-
-@app.route("/api/upload-course-image", methods=["POST"])
-@login_required
-def upload_profile_pic():
-    if "profile_pic" not in request.files:
-        return jsonify({"message":"No file part"}), 400
-    file = request.files["profile_pic"]
-    if file.filename == "":
-        return jsonify({"message":"No selected file"}), 400
-    if not allowed_file(file.filename):
-        return jsonify({"message":"File type not allowed"}), 400
-
-    # secure a unique filename
-    ext = file.filename.rsplit(".",1)[1].lower()
-    filename = secure_filename(f"user_{g.user_id}_{uuid4().hex}.{ext}")
-    local_tmp = os.path.join("/tmp", filename)
-    try:
-        file.save(local_tmp)
-
-        # upload via FTP to Bluehost
-        public_url = upload_file_to_bluehost(local_tmp, filename)
-
-        # update DB: set users.profile_pic = public_url (or relative path)
-        run_query("UPDATE users SET profile_pic=%s WHERE id=%s", (public_url, g.user_id), commit=True)
-
-        return jsonify({"message":"uploaded", "url": public_url}), 201
-    except Exception as e:
-        current_app.logger.exception("Upload failed")
-        return jsonify({"message":"upload failed", "error": str(e)}), 500
-    finally:
-        if os.path.exists(local_tmp):
-            try:
-                os.remove(local_tmp)
-            except Exception:
-                pass
-
-
-
 # -------------------------------
 # GET USER PROFILE
 # -------------------------------
@@ -529,7 +540,7 @@ def update_profile():
             file.save(filepath)
             profile_pic_path = f"{UPLOAD_FOLDER}/{filename}"
             
-            UPLOAD_FOLDER = "/public_html/uploads/profile_pics"
+        
             os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
