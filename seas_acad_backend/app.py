@@ -30,6 +30,34 @@ app = Flask(__name__)
 UPLOAD_FOLDER = "uploads/profile_pics"
 CORS(app)  # allow cross-origin requests for your Flutter app
 
+
+def upload_file_to_bluehost(local_path, remote_filename):
+    ftp_host = os.getenv("FTP_HOST")
+    ftp_user = os.getenv("FTP_USER")
+    ftp_pass = os.getenv("FTP_PASS")
+    remote_dir = os.getenv("UPLOAD_REMOTE_DIR", "public_html/uploads/course_images")
+
+    ftp = ftplib.FTP(ftp_host, timeout=30)
+    ftp.login(ftp_user, ftp_pass)
+
+    # Ensure directory exists
+    for part in remote_dir.split("/"):
+        if not part:
+            continue
+        try:
+            ftp.cwd(part)
+        except ftplib.error_perm:
+            ftp.mkd(part)
+            ftp.cwd(part)
+
+    with open(local_path, "rb") as f:
+        ftp.storbinary(f"STOR {remote_filename}", f)
+    ftp.quit()
+
+    base_url = os.getenv("BASE_FILE_URL", "https://seasecurity.tech/uploads/course_images")
+    return f"{base_url.rstrip('/')}/{remote_filename}"
+
+
 # --- DB connection helper ---
 def get_db_connection():
     conn = pymysql.connect(
