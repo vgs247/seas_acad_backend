@@ -5,3 +5,5 @@ flask-cors
 pyjwt
 werkzeug
 cryptography
+requests
+python-dotenv
