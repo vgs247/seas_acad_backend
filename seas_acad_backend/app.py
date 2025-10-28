@@ -55,17 +55,17 @@ def upload_file_to_bluehost(local_path, remote_filename):
             ftp.cwd(part)
 
     # Only the filename for STOR
-    filename_only = os.path.basename(remote_filename)
+    filename = os.path.basename(remote_filename)
 
     # Upload the file
     with open(local_path, "rb") as f:
-        ftp.storbinary(f"STOR {filename_only}", f)
+        ftp.storbinary(f"STOR {filename}", f)
 
     ftp.quit()
 
     # Web-accessible URL
     base_url = os.getenv("BASE_FILE_URL", "https://seasecurity.tech/uploads/course_images")
-    return f"{base_url.rstrip('/')}/{filename_only}"
+    return f"{base_url.rstrip('/')}/{filename}"
 
 # --- DB connection helper ---
 def get_db_connection():
@@ -291,7 +291,8 @@ def add_course():
             file.save(local_tmp)
 
             # Upload to Bluehost FTP
-            course_image = upload_file_to_bluehost(local_tmp, f"course_images/{filename}")
+            course_image = upload_file_to_bluehost(local_tmp, filename)
+
 
             # Update DB with image URL
             run_query(
