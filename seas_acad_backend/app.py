@@ -32,23 +32,20 @@ CORS(app)  # allow cross-origin requests for your Flutter app
 
 
 def upload_file_to_bluehost(local_path, remote_filename):
-    ftp_host = os.getenv("FTP_HOST")
-    ftp_user = os.getenv("FTP_USER")
-    ftp_pass = os.getenv("FTP_PASS")
-    remote_dir = os.getenv("UPLOAD_REMOTE_DIR", "course_images")  # relative to FTP root
+    import ftplib
+    import os
+
+    # FTP credentials from environment
+    ftp_host = os.getenv("FTP_HOST")        # e.g., tar.doi.mybluehost.me
+    ftp_user = os.getenv("FTP_USER")        # e.g., Atsu@tar.doi.mybluehost.me
+    ftp_pass = os.getenv("FTP_PASS")        # stored in Render environment secrets
+    remote_dir = os.getenv("UPLOAD_REMOTE_DIR", "course_images")  # relative to FTP home
 
     ftp = ftplib.FTP(ftp_host, timeout=30)
     ftp.login(ftp_user, ftp_pass)
 
-    # Navigate to FTP root safely
-    try:
-        ftp.cwd("/")
-    except ftplib.error_perm:
-        # If root cannot be changed, we are already at FTP root
-        pass
-
-    # Create directories recursively if they don't exist
-    for part in remote_dir.strip("/").split("/"):
+    # Ensure the remote directory exists
+    for part in remote_dir.split("/"):
         if not part:
             continue
         try:
@@ -59,13 +56,14 @@ def upload_file_to_bluehost(local_path, remote_filename):
 
     # Upload the file
     with open(local_path, "rb") as f:
-        ftp.storbinary(f"STOR " + remote_filename, f)
+        ftp.storbinary(f"STOR {remote_filename}", f)
 
     ftp.quit()
 
-    # Return the public URL
+    # Web-accessible URL
     base_url = os.getenv("BASE_FILE_URL", "https://seasecurity.tech/uploads/course_images")
     return f"{base_url.rstrip('/')}/{remote_filename}"
+
 
 # --- DB connection helper ---
 def get_db_connection():
