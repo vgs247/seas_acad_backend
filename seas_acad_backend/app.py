@@ -36,9 +36,9 @@ def upload_file_to_bluehost(local_path, remote_filename):
     import os
 
     # FTP credentials from environment
-    ftp_host = os.getenv("FTP_HOST")        # e.g., tar.doi.mybluehost.me
-    ftp_user = os.getenv("FTP_USER")        # e.g., Atsu@tar.doi.mybluehost.me
-    ftp_pass = os.getenv("FTP_PASS")        # stored in Render environment secrets
+    ftp_host = os.getenv("FTP_HOST")
+    ftp_user = os.getenv("FTP_USER")
+    ftp_pass = os.getenv("FTP_PASS")
     remote_dir = os.getenv("UPLOAD_REMOTE_DIR", "course_images")  # relative to FTP home
 
     ftp = ftplib.FTP(ftp_host, timeout=30)
@@ -54,16 +54,18 @@ def upload_file_to_bluehost(local_path, remote_filename):
             ftp.mkd(part)
             ftp.cwd(part)
 
+    # Only the filename for STOR
+    filename_only = os.path.basename(remote_filename)
+
     # Upload the file
     with open(local_path, "rb") as f:
-        ftp.storbinary(f"STOR {remote_filename}", f)
+        ftp.storbinary(f"STOR {filename_only}", f)
 
     ftp.quit()
 
     # Web-accessible URL
     base_url = os.getenv("BASE_FILE_URL", "https://seasecurity.tech/uploads/course_images")
-    return f"{base_url.rstrip('/')}/{remote_filename}"
-
+    return f"{base_url.rstrip('/')}/{filename_only}"
 
 # --- DB connection helper ---
 def get_db_connection():
