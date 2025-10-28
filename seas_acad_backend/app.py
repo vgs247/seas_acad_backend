@@ -264,21 +264,25 @@ def add_course():
         file = request.files.get("file")
 
         # Validate required fields
-        required = [title, description, duration, total_modules, amount, category]
-        if not all(required):
+        if not all([title, description, duration, total_modules, amount, category]):
             return jsonify({"message": "All fields are required"}), 400
 
-        # Insert the course first (no image yet)
-        query = """
-            INSERT INTO courses (title, description, duration, total_modules, amount, category)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """
-        run_query(query, (title, description, duration, total_modules, amount, category), commit=True)
+        # --- SINGLE CONNECTION TO AVOID DUPLICATES ---
+        conn = get_db_connection()
+        try:
+            with conn.cursor() as cur:
+                # Insert course
+                cur.execute("""
+                    INSERT INTO courses (title, description, duration, total_modules, amount, category)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (title, description, duration, total_modules, amount, category))
+                course_id = cur.lastrowid  #correct course ID from same connection
 
-        # Retrieve the last inserted course ID
-        new_course = run_query("SELECT LAST_INSERT_ID() AS id", fetchone=True)
-        course_id = new_course["id"]
+            conn.commit()
+        finally:
+            conn.close()
 
+        # --- Handle Image Upload ---
         course_image = None
         if file and file.filename:
             allowed_extensions = {"jpg", "jpeg", "png"}
@@ -293,15 +297,14 @@ def add_course():
             # Upload to Bluehost FTP
             course_image = upload_file_to_bluehost(local_tmp, filename)
 
-
-            # Update DB with image URL
+            # Update course image URL in DB
             run_query(
                 "UPDATE courses SET course_image=%s WHERE id=%s",
                 (course_image, course_id),
                 commit=True
             )
 
-            # Remove temp file
+            # Clean up temp file
             if os.path.exists(local_tmp):
                 os.remove(local_tmp)
 
