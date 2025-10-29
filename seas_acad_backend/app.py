@@ -361,26 +361,6 @@ def featured_courses():
     """, fetchall=True)
     return jsonify(rows)
 
-@app.route("/api/featured", methods=["POST", ])
-@login_required
-def set_featured():
-    if not getattr(g, "is_admin", False):
-       return jsonify({"message": "admin only"}), 403
-
-    data = request.get_json() or {}
-    course_id = data.get("course_id")
-    if not course_id:
-        return jsonify({"message":"course_id required"}), 400
-    run_query("INSERT INTO featured_courses (course_id) VALUES (%s)", (course_id,), commit=True)
-    return jsonify({"message":"featured set"}), 201
-
-# --- Modules endpoints ---
-@app.route("/api/modules/<int:course_id>", methods=["GET"])
-def get_modules(course_id):
-    rows = run_query("SELECT id as module_id, module_number, module_title, content, video_url, pdf_url, module_progress FROM modules WHERE course_id=%s ORDER BY module_number ASC", (course_id,), fetchall=True)
-    return jsonify(rows)
-
-
 @app.route("/api/modules", methods=["POST"])
 @login_required
 def add_module():
@@ -394,25 +374,16 @@ def add_module():
         if r not in data:
             return jsonify({"message": f"{r} required"}), 400
 
-    subtitles = data.get("subtitles")
+    subtitles = data["subtitles"]
 
-    # ✅ Normalize subtitles/content to always be a Python list
+    # 🔹 If subtitles come as string, parse them
     if isinstance(subtitles, str):
         try:
             subtitles = json.loads(subtitles)
         except Exception:
-            return jsonify({"message": "Invalid JSON string for subtitles"}), 400
+            return jsonify({"message": "Invalid JSON format for subtitles"}), 400
 
-    # If it’s already a list, no issue
-    elif not isinstance(subtitles, list):
-        return jsonify({"message": "subtitles must be a list"}), 400
-
-    # ✅ Ensure it’s valid before insert
-    try:
-        subtitles_json = json.dumps(subtitles, ensure_ascii=False)
-    except Exception as e:
-        return jsonify({"message": f"Error serializing subtitles: {e}"}), 400
-
+    # 🔹 Ensure we store as JSON (not string)
     try:
         run_query("""
             INSERT INTO modules (course_id, module_number, module_title, content)
@@ -421,16 +392,16 @@ def add_module():
             data["course_id"],
             data["module_number"],
             data["module_title"],
-            subtitles_json  # store clean JSON only once
+            json.dumps(subtitles)  # store real JSON
         ), commit=True)
 
         return jsonify({
-            "message": "module created successfully",
-            "module": {
+            "message": "Module created successfully",
+            "data": {
                 "course_id": data["course_id"],
                 "module_number": data["module_number"],
                 "module_title": data["module_title"],
-                "content": subtitles  # return as a real array, not string
+                "content": subtitles
             }
         }), 201
 
@@ -442,45 +413,35 @@ def add_module():
 
 
 
-@app.route("/api/modules/<int:course_id>", methods=["GET"])
-@login_required
-def get_course_modules(course_id):
-    if not getattr(g, "is_admin", False):
-        return jsonify({"message": "admin only"}), 403
 
+@app.route("/api/modules/<int:course_id>", methods=["GET"])
+def get_modules(course_id):
     rows = run_query("""
-        SELECT 
-            id AS module_id,
-            module_number,
-            module_title,
-            content,
-            video_url,
-            pdf_url,
-            module_progress
-        FROM modules 
-        WHERE course_id = %s 
+        SELECT id AS module_id,
+               module_number,
+               module_title,
+               content,
+               video_url,
+               pdf_url,
+               module_progress
+        FROM modules
+        WHERE course_id=%s
         ORDER BY module_number ASC
     """, (course_id,), fetchall=True)
 
-    modules = []
+    # Decode JSON content before sending
     for row in rows:
-        # Parse JSON safely (avoid crashing on invalid/missing JSON)
         try:
-            subtitles = json.loads(row.get("content", "[]")) if row.get("content") else []
+            if isinstance(row["content"], str):
+                row["content"] = json.loads(row["content"])
         except Exception:
-            subtitles = []
+            row["content"] = []  # fallback
 
-        modules.append({
-            "module_id": row["module_id"],
-            "module_number": row["module_number"],
-            "module_title": row["module_title"],
-            "video_url": row.get("video_url"),
-            "pdf_url": row.get("pdf_url"),
-            "module_progress": row.get("module_progress"),
-            "subtitles": subtitles  # structured data
-        })
+    return jsonify(rows)
 
-    return jsonify(modules), 200
+
+
+
 
 
 @app.route("/api/module_progress/<int:module_id>", methods=["PATCH"])
