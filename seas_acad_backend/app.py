@@ -385,15 +385,23 @@ def add_module():
         return jsonify({"message": "admin only"}), 403
 
     data = request.get_json() or {}
-    required = ["course_id","module_number","module_title"]
+    required = ["course_id", "module_number", "module_title", "subtitles"]
     for r in required:
         if r not in data:
             return jsonify({"message": f"{r} required"}), 400
+
     run_query("""
-        INSERT INTO modules (course_id, module_number, module_title, content, video_url, pdf_url)
-        VALUES (%s,%s,%s,%s,%s,%s)
-    """, (data["course_id"], data["module_number"], data["module_title"], data.get("content"), data.get("video_url"), data.get("pdf_url")), commit=True)
-    return jsonify({"message":"module created"}), 201
+        INSERT INTO modules (course_id, module_number, module_title, content)
+        VALUES (%s, %s, %s, %s)
+    """, (
+        data["course_id"],
+        data["module_number"],
+        data["module_title"],
+        json.dumps(data["subtitles"])  # stores full subtitle structure
+    ), commit=True)
+
+    return jsonify({"message": "module created successfully"}), 201
+
 
 @app.route("/api/module_progress/<int:module_id>", methods=["PATCH"])
 @login_required
