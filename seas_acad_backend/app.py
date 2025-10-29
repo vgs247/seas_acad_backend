@@ -385,26 +385,47 @@ def get_modules(course_id):
 @app.route("/api/modules", methods=["POST"])
 @login_required
 def add_module():
+    # Admin-only route
     if not getattr(g, "is_admin", False):
         return jsonify({"message": "admin only"}), 403
 
     data = request.get_json() or {}
+
+    # Validate required fields
     required = ["course_id", "module_number", "module_title", "subtitles"]
     for r in required:
         if r not in data:
             return jsonify({"message": f"{r} required"}), 400
 
-    run_query("""
-        INSERT INTO modules (course_id, module_number, module_title, content)
-        VALUES (%s, %s, %s, %s)
-    """, (
-        data["course_id"],
-        data["module_number"],
-        data["module_title"],
-        json.dumps(data["subtitles"])  # stores full subtitle structure
-    ), commit=True)
+    # Normalize the subtitles/content field
+    subtitles = data.get("subtitles")
 
-    return jsonify({"message": "module created successfully"}), 201
+    # Handle both stringified and normal JSON arrays
+    if isinstance(subtitles, str):
+        try:
+            subtitles = json.loads(subtitles)
+        except Exception:
+            return jsonify({"message": "Invalid JSON format for subtitles"}), 400
+    elif not isinstance(subtitles, list):
+        return jsonify({"message": "subtitles must be a list"}), 400
+
+    try:
+        # Insert into DB
+        run_query("""
+            INSERT INTO modules (course_id, module_number, module_title, content)
+            VALUES (%s, %s, %s, %s)
+        """, (
+            data["course_id"],
+            data["module_number"],
+            data["module_title"],
+            json.dumps(subtitles)  # safely store the full subtitle array
+        ), commit=True)
+
+        return jsonify({"message": "module created successfully"}), 201
+
+    except Exception as e:
+        return jsonify({"message": "Error creating module", "error": str(e)}), 500
+
 
 
 
