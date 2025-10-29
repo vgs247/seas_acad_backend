@@ -209,12 +209,51 @@ def login():
 # --- Courses CRUD (Admin endpoints protected by JWT for simplicity) ---
 @app.route("/api/courses", methods=["GET"])
 def list_courses():
-    rows = run_query("SELECT id as course_id, title as course_title, description, duration, total_modules, amount, category, course_image FROM courses ORDER BY created_at DESC", fetchall=True)
-    # add number of lessons / num_lessons
-    for r in rows:
-        num_lessons = run_query("SELECT COUNT(*) AS cnt FROM modules WHERE course_id=%s", (r["course_id"],), fetchone=True)
-        r["num_lessons"] = num_lessons["cnt"] if num_lessons else 0
-    return jsonify(rows)
+    try:
+        # Fetch all courses
+        rows = run_query("""
+            SELECT 
+                id AS course_id, 
+                title AS course_title, 
+                description, 
+                duration, 
+                total_modules, 
+                amount, 
+                category, 
+                course_image 
+            FROM courses 
+            ORDER BY created_at DESC
+        """, fetchall=True)
+
+        results = []
+
+        for r in rows:
+            try:
+                # Count lessons (modules) for each course safely
+                num_lessons = run_query(
+                    "SELECT COUNT(*) AS cnt FROM modules WHERE course_id=%s",
+                    (r["course_id"],),
+                    fetchone=True
+                )
+                r["num_lessons"] = num_lessons["cnt"] if num_lessons else 0
+
+            except Exception as e:
+                # Don't crash the endpoint if a subquery fails
+                print(f" Error counting lessons for course {r.get('course_id')}: {e}")
+                r["num_lessons"] = 0
+
+            results.append(r)
+
+        return jsonify(results), 200
+
+    except Exception as e:
+        # Capture and return the real cause
+        print(f" Error fetching courses: {e}")
+        return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
+    
+    
+    
+    
 
 @app.route("/api/courses/<int:course_id>", methods=["GET"])
 def get_course(course_id):
