@@ -380,29 +380,45 @@ def get_modules(course_id):
     rows = run_query("SELECT id as module_id, module_number, module_title, content, video_url, pdf_url, module_progress FROM modules WHERE course_id=%s ORDER BY module_number ASC", (course_id,), fetchall=True)
     return jsonify(rows)
 
-@app.route("/api/modules", methods=["POST"])
+@app.route("/api/modules/<int:course_id>", methods=["GET"])
 @login_required
-def add_module():
+def get_modules(course_id):
     if not getattr(g, "is_admin", False):
         return jsonify({"message": "admin only"}), 403
 
-    data = request.get_json() or {}
-    required = ["course_id", "module_number", "module_title", "subtitles"]
-    for r in required:
-        if r not in data:
-            return jsonify({"message": f"{r} required"}), 400
+    rows = run_query("""
+        SELECT 
+            id AS module_id,
+            module_number,
+            module_title,
+            content,
+            video_url,
+            pdf_url,
+            module_progress
+        FROM modules 
+        WHERE course_id = %s 
+        ORDER BY module_number ASC
+    """, (course_id,), fetchall=True)
 
-    run_query("""
-        INSERT INTO modules (course_id, module_number, module_title, content)
-        VALUES (%s, %s, %s, %s)
-    """, (
-        data["course_id"],
-        data["module_number"],
-        data["module_title"],
-        json.dumps(data["subtitles"])  # stores full subtitle structure
-    ), commit=True)
+    modules = []
+    for row in rows:
+        # Parse JSON safely (avoid crashing on invalid/missing JSON)
+        try:
+            subtitles = json.loads(row.get("content", "[]")) if row.get("content") else []
+        except Exception:
+            subtitles = []
 
-    return jsonify({"message": "module created successfully"}), 201
+        modules.append({
+            "module_id": row["module_id"],
+            "module_number": row["module_number"],
+            "module_title": row["module_title"],
+            "video_url": row.get("video_url"),
+            "pdf_url": row.get("pdf_url"),
+            "module_progress": row.get("module_progress"),
+            "subtitles": subtitles  # structured data
+        })
+
+    return jsonify(modules), 200
 
 
 @app.route("/api/module_progress/<int:module_id>", methods=["PATCH"])
