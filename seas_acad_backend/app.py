@@ -78,7 +78,7 @@ def get_db_connection():
         database=DB_NAME,
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=False,
-        connect_timeout=5
+        connect_timeout=15
     )
     return conn
 
@@ -206,12 +206,16 @@ def login():
     })
 
 
+
+
 # --- Courses CRUD (Admin endpoints protected by JWT for simplicity) ---
 @app.route("/api/courses", methods=["GET"])
 def list_courses():
     try:
-        # Fetch all courses
-        rows = run_query("""
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        cursor.execute("""
             SELECT 
                 id AS course_id, 
                 title AS course_title, 
@@ -223,33 +227,30 @@ def list_courses():
                 course_image 
             FROM courses 
             ORDER BY created_at DESC
-        """, fetchall=True)
+        """)
+        courses = cursor.fetchall()
 
-        results = []
+        # Fetch counts for all courses in one query
+        cursor.execute("""
+            SELECT course_id, COUNT(*) AS cnt 
+            FROM modules 
+            GROUP BY course_id
+        """)
+        counts = {row["course_id"]: row["cnt"] for row in cursor.fetchall()}
 
-        for r in rows:
-            try:
-                # Count lessons (modules) for each course safely
-                num_lessons = run_query(
-                    "SELECT COUNT(*) AS cnt FROM modules WHERE course_id=%s",
-                    (r["course_id"],),
-                    fetchone=True
-                )
-                r["num_lessons"] = num_lessons["cnt"] if num_lessons else 0
+        # Attach counts
+        for c in courses:
+            c["num_lessons"] = counts.get(c["course_id"], 0)
 
-            except Exception as e:
-                # Don't crash the endpoint if a subquery fails
-                print(f" Error counting lessons for course {r.get('course_id')}: {e}")
-                r["num_lessons"] = 0
+        cursor.close()
+        conn.close()
 
-            results.append(r)
-
-        return jsonify(results), 200
+        return jsonify(courses), 200
 
     except Exception as e:
-        # Capture and return the real cause
-        print(f" Error fetching courses: {e}")
+        print(f"Error in /api/courses: {e}")
         return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
+
     
     
     
