@@ -457,6 +457,17 @@ def get_modules(course_id):
     return jsonify(rows)
 
 
+@app.route("/api/db-test")
+def db_test():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            cur.execute("SELECT NOW()")
+            result = cur.fetchone()
+        conn.close()
+        return jsonify({"status": "ok", "time": result})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 
