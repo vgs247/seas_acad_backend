@@ -30,7 +30,7 @@ if not all([DB_HOST, DB_NAME, DB_USER, DB_PASSWORD]):
 
 app = Flask(__name__)
 UPLOAD_FOLDER = "uploads/profile_pics"
-CORS(app)  # allow cross-origin requests for your Flutter app
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 
 
 def upload_file_to_bluehost(local_path, remote_filename):
