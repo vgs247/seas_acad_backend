@@ -381,36 +381,39 @@ def get_modules(course_id):
     return jsonify(rows)
 
 
-
 @app.route("/api/modules", methods=["POST"])
 @login_required
 def add_module():
-    # Admin-only route
     if not getattr(g, "is_admin", False):
         return jsonify({"message": "admin only"}), 403
 
     data = request.get_json() or {}
 
-    # Validate required fields
     required = ["course_id", "module_number", "module_title", "subtitles"]
     for r in required:
         if r not in data:
             return jsonify({"message": f"{r} required"}), 400
 
-    # Normalize the subtitles/content field
     subtitles = data.get("subtitles")
 
-    # Handle both stringified and normal JSON arrays
+    # ✅ Normalize subtitles/content to always be a Python list
     if isinstance(subtitles, str):
         try:
             subtitles = json.loads(subtitles)
         except Exception:
-            return jsonify({"message": "Invalid JSON format for subtitles"}), 400
+            return jsonify({"message": "Invalid JSON string for subtitles"}), 400
+
+    # If it’s already a list, no issue
     elif not isinstance(subtitles, list):
         return jsonify({"message": "subtitles must be a list"}), 400
 
+    # ✅ Ensure it’s valid before insert
     try:
-        # Insert into DB
+        subtitles_json = json.dumps(subtitles, ensure_ascii=False)
+    except Exception as e:
+        return jsonify({"message": f"Error serializing subtitles: {e}"}), 400
+
+    try:
         run_query("""
             INSERT INTO modules (course_id, module_number, module_title, content)
             VALUES (%s, %s, %s, %s)
@@ -418,13 +421,22 @@ def add_module():
             data["course_id"],
             data["module_number"],
             data["module_title"],
-            json.dumps(subtitles)  # safely store the full subtitle array
+            subtitles_json  # store clean JSON only once
         ), commit=True)
 
-        return jsonify({"message": "module created successfully"}), 201
+        return jsonify({
+            "message": "module created successfully",
+            "module": {
+                "course_id": data["course_id"],
+                "module_number": data["module_number"],
+                "module_title": data["module_title"],
+                "content": subtitles  # return as a real array, not string
+            }
+        }), 201
 
     except Exception as e:
         return jsonify({"message": "Error creating module", "error": str(e)}), 500
+
 
 
 
