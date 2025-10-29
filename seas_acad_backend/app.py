@@ -361,6 +361,9 @@ def featured_courses():
     """, fetchall=True)
     return jsonify(rows)
 
+
+
+
 @app.route("/api/modules", methods=["POST"])
 @login_required
 def add_module():
@@ -429,15 +432,25 @@ def get_modules(course_id):
         ORDER BY module_number ASC
     """, (course_id,), fetchall=True)
 
-    # Decode JSON content before sending
+    # Decode and normalize
     for row in rows:
         try:
             if isinstance(row["content"], str):
                 row["content"] = json.loads(row["content"])
         except Exception:
-            row["content"] = []  # fallback
+            row["content"] = []
+
+        # Normalize any "data" fields that are stringified JSON
+        for sub in row.get("content", []):
+            for item in sub.get("contents", []):
+                if item["type"] == "text" and isinstance(item["data"], str):
+                    try:
+                        item["data"] = json.loads(item["data"])
+                    except Exception:
+                        pass
 
     return jsonify(rows)
+
 
 
 
