@@ -363,7 +363,6 @@ def featured_courses():
 
 
 
-
 @app.route("/api/modules", methods=["POST"])
 @login_required
 def add_module():
@@ -379,15 +378,14 @@ def add_module():
 
     subtitles = data["subtitles"]
 
-    # 🔹 If subtitles come as string, parse them
     if isinstance(subtitles, str):
         try:
             subtitles = json.loads(subtitles)
         except Exception:
             return jsonify({"message": "Invalid JSON format for subtitles"}), 400
 
-    # 🔹 Ensure we store as JSON (not string)
     try:
+        # store all subtitles with videos/pdfs inside content
         run_query("""
             INSERT INTO modules (course_id, module_number, module_title, content)
             VALUES (%s, %s, %s, %s)
@@ -395,7 +393,7 @@ def add_module():
             data["course_id"],
             data["module_number"],
             data["module_title"],
-            json.dumps(subtitles)  # store real JSON
+            json.dumps(subtitles, ensure_ascii=False)
         ), commit=True)
 
         return jsonify({
@@ -410,6 +408,7 @@ def add_module():
 
     except Exception as e:
         return jsonify({"message": "Error creating module", "error": str(e)}), 500
+
 
 
 
@@ -432,24 +431,31 @@ def get_modules(course_id):
         ORDER BY module_number ASC
     """, (course_id,), fetchall=True)
 
-    # Decode and normalize
-    for row in rows:
-        try:
-            if isinstance(row["content"], str):
-                row["content"] = json.loads(row["content"])
-        except Exception:
-            row["content"] = []
+    def try_json_load(value):
+        """Helper: safely parse stringified JSON if possible."""
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return value
+        return value
 
-        # Normalize any "data" fields that are stringified JSON
-        for sub in row.get("content", []):
-            for item in sub.get("contents", []):
-                if item["type"] == "text" and isinstance(item["data"], str):
-                    try:
-                        item["data"] = json.loads(item["data"])
-                    except Exception:
-                        pass
+    for row in rows:
+        # Decode module-level JSON fields
+        row["content"] = try_json_load(row.get("content", []))
+        row["video_url"] = try_json_load(row.get("video_url"))
+        row["pdf_url"] = try_json_load(row.get("pdf_url"))
+
+        # Normalize deeply nested fields (like "data" in contents)
+        if isinstance(row["content"], list):
+            for sub in row["content"]:
+                if isinstance(sub, dict) and "contents" in sub:
+                    for item in sub["contents"]:
+                        if "data" in item:
+                            item["data"] = try_json_load(item["data"])
 
     return jsonify(rows)
+
 
 
 
