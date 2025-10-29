@@ -382,7 +382,7 @@ def get_modules(course_id):
 
 @app.route("/api/modules/<int:course_id>", methods=["GET"])
 @login_required
-def get_modules(course_id):
+def get_course_modules(course_id):
     if not getattr(g, "is_admin", False):
         return jsonify({"message": "admin only"}), 403
 
