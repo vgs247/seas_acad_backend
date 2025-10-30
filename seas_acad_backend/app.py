@@ -451,13 +451,18 @@ def add_module():
 
     data = request.get_json() or {}
 
-    required = ["course_id", "module_number", "module_title", "subtitles"]
+    # ✅ Accept both "subtitles" and "subtitle"
+    subtitles = data.get("subtitles") or data.get("subtitle")
+
+    required = ["course_id", "module_number", "module_title"]
     for r in required:
         if r not in data:
             return jsonify({"message": f"{r} required"}), 400
 
-    subtitles = data["subtitles"]
+    if subtitles is None:
+        return jsonify({"message": "subtitles required"}), 400
 
+    # ✅ Convert stringified JSON to actual list if needed
     if isinstance(subtitles, str):
         try:
             subtitles = json.loads(subtitles)
@@ -465,7 +470,7 @@ def add_module():
             return jsonify({"message": "Invalid JSON format for subtitles"}), 400
 
     try:
-        # store all subtitles with videos/pdfs inside content
+        # Store all subtitles and their content in one JSON column
         run_query("""
             INSERT INTO modules (course_id, module_number, module_title, content)
             VALUES (%s, %s, %s, %s)
@@ -487,6 +492,7 @@ def add_module():
         }), 201
 
     except Exception as e:
+        current_app.logger.exception("Error creating module")
         return jsonify({"message": "Error creating module", "error": str(e)}), 500
 
 
