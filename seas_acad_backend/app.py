@@ -373,7 +373,7 @@ def update_module(module_id):
 
     # Update the module title if provided
     if title:
-    run_query(
+     run_query(
         "UPDATE modules SET module_title = %s WHERE id = %s",
         (title, module_id),
         commit=True
