@@ -367,47 +367,53 @@ def update_module(module_id):
         return jsonify({"message": "admin only"}), 403
 
     data = request.get_json() or {}
-
     title = data.get("module_title")
     subtitles = data.get("subtitles", [])
 
-    # Update the module title if provided
+    # ✅ Update module title if provided
     if title:
-     run_query(
-        "UPDATE modules SET module_title = %s WHERE id = %s",
-        (title, module_id),
-        commit=True
-    )
+        run_query(
+            "UPDATE modules SET module_title = %s WHERE id = %s",
+            (title, module_id),
+            commit=True
+        )
 
+    # ✅ Delete all related contents first, then subtitles
+    run_query("""
+        DELETE c FROM contents c
+        INNER JOIN subtitles s ON c.subtitle_id = s.id
+        WHERE s.module_id = %s
+    """, (module_id,), commit=True)
 
-    # Delete old subtitles and contents (optional)
     run_query("DELETE FROM subtitles WHERE module_id = %s", (module_id,), commit=True)
 
-    # Re-insert subtitles and contents
+    # ✅ Reinsert subtitles and their contents
     for sub in subtitles:
         subtitle_title = sub.get("subtitle_title")
         subtitle_number = sub.get("subtitle_number")
 
+        # Insert subtitle and retrieve its new ID
         run_query(
-    "INSERT INTO subtitles (module_id, subtitle_number, subtitle_title) VALUES (%s, %s, %s)",
-    (module_id, subtitle_number, subtitle_title),
-    commit=True
-)
+            "INSERT INTO subtitles (module_id, subtitle_number, subtitle_title) VALUES (%s, %s, %s)",
+            (module_id, subtitle_number, subtitle_title),
+            commit=True
+        )
 
-     # then get the inserted I 
+        # Get the last inserted subtitle ID safely
         sub_id = run_query("SELECT LAST_INSERT_ID() AS id", fetchone=True)["id"]
 
-
+        # Insert contents for this subtitle
         for content in sub.get("contents", []):
             ctype = content.get("type")
-            data = json.dumps(content.get("data"))
+            cdata = json.dumps(content.get("data"))  # serialize quill data
             run_query(
                 "INSERT INTO contents (subtitle_id, type, data) VALUES (%s, %s, %s)",
-                (sub_id, ctype, data),
+                (sub_id, ctype, cdata),
                 commit=True
             )
 
     return jsonify({"message": "Module updated successfully"}), 200
+
 
 
 @app.route("/api/courses/<int:course_id>", methods=["DELETE"])
@@ -725,61 +731,62 @@ def change_password():
 # -------------------------------
 # UPDATE PROFILE INFO (NAME, EMAIL, PROFILE PIC)
 # -------------------------------
-@app.route("/api/modules/<int:module_id>", methods=["PUT"])
+@app.route("/api/profile/update", methods=["PUT"])
 @login_required
-def update_module(module_id):
-    if not getattr(g, "is_admin", False):
-        return jsonify({"message": "Admin only"}), 403
+def update_profile():
+    """Update user's full name, email, and profile picture"""
+    full_name = request.form.get("full_name")
+    email = request.form.get("email")
+    file = request.files.get("profile_pic")
 
-    data = request.get_json()
-    title = data.get("module_title")
-    module_number = data.get("module_number")
-    progress = data.get("module_progress")
-    pdf_url = data.get("pdf_url")
-    video_url = data.get("video_url")
-    content = data.get("content", [])
+    if not full_name or not email:
+        return jsonify({"message": "Full name and email are required"}), 400
 
-    # --- Update the module itself ---
-    run_query(
-        """
-        UPDATE modules 
-        SET module_title = %s, module_number = %s, module_progress = %s, 
-            pdf_url = %s, video_url = %s
-        WHERE id = %s
-        """,
-        (title, module_number, progress, pdf_url, video_url, module_id),
-        commit=True
-    )
+    try:
+        # Split full name into first and last
+        name_parts = full_name.strip().split(" ", 1)
+        first_name = name_parts[0]
+        last_name = name_parts[1] if len(name_parts) > 1 else ""
 
-    # --- Loop through each subtitle ---
-    for sub in content:
-        subtitle_number = sub.get("subtitle_number")
-        subtitle_title = sub.get("subtitle_title")
-        contents = sub.get("contents", [])
+        profile_pic_path = None
 
-        # Insert the subtitle
-        run_query(
-            "INSERT INTO subtitles (module_id, subtitle_number, subtitle_title) VALUES (%s, %s, %s)",
-            (module_id, subtitle_number, subtitle_title),
-            commit=True
-        )
+        # Handle image upload
+        if file and allowed_file(file.filename):
+            filename = secure_filename(f"user_{g.user_id}_" + file.filename)
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            file.save(filepath)
+            profile_pic_path = f"{UPLOAD_FOLDER}/{filename}"
+            
+        
+            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-        # Get its ID
-        sub_id = run_query("SELECT LAST_INSERT_ID() AS id", fetchone=True)["id"]
 
-        # --- Loop through contents (text, videos, etc.) ---
-        for item in contents:
-            content_type = item.get("type")
-            data = json.dumps(item.get("data"))
-
+            # Update database with new image path
             run_query(
-                "INSERT INTO contents (subtitle_id, type, data) VALUES (%s, %s, %s)",
-                (sub_id, content_type, data),
+                "UPDATE users SET first_name=%s, last_name=%s, email=%s, profile_pic=%s WHERE id=%s",
+                (first_name, last_name, email, profile_pic_path, g.user_id),
+                commit=True
+            )
+        else:
+            # Update only name and email
+            run_query(
+                "UPDATE users SET first_name=%s, last_name=%s, email=%s WHERE id=%s",
+                (first_name, last_name, email, g.user_id),
                 commit=True
             )
 
-    return jsonify({"message": "Module updated successfully"})
+        return jsonify({
+            "message": "Profile updated successfully",
+            "full_name": f"{first_name} {last_name}".strip(),
+            "email": email,
+            "profile_pic": profile_pic_path
+        }), 200
 
+    except Exception as e:
+        return jsonify({
+            "message": "Error updating profile",
+            "error": str(e)
+        }), 500
         
         
         
