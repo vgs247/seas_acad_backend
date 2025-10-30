@@ -385,10 +385,32 @@ def update_course(course_id):
 @login_required
 def delete_course(course_id):
     if not getattr(g, "is_admin", False):
-       return jsonify({"message": "admin only"}), 403
+        return jsonify({"message": "admin only"}), 403
 
-    run_query("DELETE FROM courses WHERE id=%s", (course_id,), commit=True)
-    return jsonify({"message":"deleted"})
+    # Check if course exists
+    course = run_query("SELECT id FROM courses WHERE id=%s", (course_id,), fetchone=True)
+    if not course:
+        return jsonify({"message": "Course not found"}), 404
+
+    try:
+        # Start transaction
+        conn = get_db_connection()
+        with conn.cursor() as cur:
+            # 1. Delete modules related to this course
+            cur.execute("DELETE FROM modules WHERE course_id=%s", (course_id,))
+            
+            # 2. Delete the course itself
+            cur.execute("DELETE FROM courses WHERE id=%s", (course_id,))
+
+        conn.commit()
+        conn.close()
+
+        return jsonify({"message": "Course and all related modules deleted successfully"}), 200
+
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({"message": "Error deleting course", "error": str(e)}), 500
 
 # --- Featured courses ---
 @app.route("/api/featured", methods=["GET"])
