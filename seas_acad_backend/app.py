@@ -725,62 +725,61 @@ def change_password():
 # -------------------------------
 # UPDATE PROFILE INFO (NAME, EMAIL, PROFILE PIC)
 # -------------------------------
-@app.route("/api/profile/update", methods=["PUT"])
+@app.route("/api/modules/<int:module_id>", methods=["PUT"])
 @login_required
-def update_profile():
-    """Update user's full name, email, and profile picture"""
-    full_name = request.form.get("full_name")
-    email = request.form.get("email")
-    file = request.files.get("profile_pic")
+def update_module(module_id):
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "Admin only"}), 403
 
-    if not full_name or not email:
-        return jsonify({"message": "Full name and email are required"}), 400
+    data = request.get_json()
+    title = data.get("module_title")
+    module_number = data.get("module_number")
+    progress = data.get("module_progress")
+    pdf_url = data.get("pdf_url")
+    video_url = data.get("video_url")
+    content = data.get("content", [])
 
-    try:
-        # Split full name into first and last
-        name_parts = full_name.strip().split(" ", 1)
-        first_name = name_parts[0]
-        last_name = name_parts[1] if len(name_parts) > 1 else ""
+    # --- Update the module itself ---
+    run_query(
+        """
+        UPDATE modules 
+        SET module_title = %s, module_number = %s, module_progress = %s, 
+            pdf_url = %s, video_url = %s
+        WHERE id = %s
+        """,
+        (title, module_number, progress, pdf_url, video_url, module_id),
+        commit=True
+    )
 
-        profile_pic_path = None
+    # --- Loop through each subtitle ---
+    for sub in content:
+        subtitle_number = sub.get("subtitle_number")
+        subtitle_title = sub.get("subtitle_title")
+        contents = sub.get("contents", [])
 
-        # Handle image upload
-        if file and allowed_file(file.filename):
-            filename = secure_filename(f"user_{g.user_id}_" + file.filename)
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
-            file.save(filepath)
-            profile_pic_path = f"{UPLOAD_FOLDER}/{filename}"
-            
-        
-            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+        # Insert the subtitle
+        run_query(
+            "INSERT INTO subtitles (module_id, subtitle_number, subtitle_title) VALUES (%s, %s, %s)",
+            (module_id, subtitle_number, subtitle_title),
+            commit=True
+        )
 
+        # Get its ID
+        sub_id = run_query("SELECT LAST_INSERT_ID() AS id", fetchone=True)["id"]
 
-            # Update database with new image path
+        # --- Loop through contents (text, videos, etc.) ---
+        for item in contents:
+            content_type = item.get("type")
+            data = json.dumps(item.get("data"))
+
             run_query(
-                "UPDATE users SET first_name=%s, last_name=%s, email=%s, profile_pic=%s WHERE id=%s",
-                (first_name, last_name, email, profile_pic_path, g.user_id),
+                "INSERT INTO contents (subtitle_id, type, data) VALUES (%s, %s, %s)",
+                (sub_id, content_type, data),
                 commit=True
             )
-        else:
-            # Update only name and email
-            run_query(
-                "UPDATE users SET first_name=%s, last_name=%s, email=%s WHERE id=%s",
-                (first_name, last_name, email, g.user_id),
-                commit=True
-            )
 
-        return jsonify({
-            "message": "Profile updated successfully",
-            "full_name": f"{first_name} {last_name}".strip(),
-            "email": email,
-            "profile_pic": profile_pic_path
-        }), 200
+    return jsonify({"message": "Module updated successfully"})
 
-    except Exception as e:
-        return jsonify({
-            "message": "Error updating profile",
-            "error": str(e)
-        }), 500
         
         
         
