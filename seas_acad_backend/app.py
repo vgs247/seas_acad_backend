@@ -360,26 +360,61 @@ def add_course():
         current_app.logger.exception("Error creating course")
         return jsonify({"message": "Error creating course", "error": str(e)}), 500
 
-@app.route("/api/courses/<int:course_id>", methods=["PUT","PATCH"])
+@app.route("/api/courses/<int:course_id>", methods=["PUT", "PATCH"])
 @login_required
 def update_course(course_id):
     if not getattr(g, "is_admin", False):
-       return jsonify({"message": "admin only"}), 403
+        return jsonify({"message": "admin only"}), 403
 
     data = request.get_json() or {}
-    # build dynamic update
-    fields = []
-    vals = []
-    allowed = ["title","description","duration","total_modules","amount","category","course_image"]
-    for key in allowed:
-        if key in data:
-            fields.append(f"{key}=%s")
-            vals.append(data[key])
-    if not fields:
-        return jsonify({"message":"no fields to update"}), 400
-    vals.append(course_id)
-    run_query(f"UPDATE courses SET {', '.join(fields)} WHERE id=%s", tuple(vals), commit=True)
-    return jsonify({"message":"updated"})
+
+    allowed_fields = [
+        "title",
+        "description",
+        "duration",
+        "total_modules",
+        "amount",
+        "category",
+        "course_image"
+    ]
+
+    updates = []
+    values = []
+
+    for key in allowed_fields:
+        if key in data and data[key] is not None:
+            updates.append(f"{key} = %s")
+            values.append(data[key])
+
+    if not updates:
+        return jsonify({"message": "no valid fields to update"}), 400
+
+    # Optional: update timestamp if you track modification time
+    updates.append("updated_at = NOW()")
+
+    values.append(course_id)
+
+    # Perform the update
+    rows_affected = run_query(
+        f"UPDATE courses SET {', '.join(updates)} WHERE id = %s",
+        tuple(values),
+        commit=True
+    )
+
+    # Verify update and return fresh data
+    course = run_query(
+        "SELECT id AS course_id, title AS course_title, description, duration, total_modules, amount, category, course_image FROM courses WHERE id = %s",
+        (course_id,),
+        fetchone=True
+    )
+
+    if not course:
+        return jsonify({"message": "course not found"}), 404
+
+    return jsonify({
+        "message": "course updated successfully",
+        "course": course
+    }), 200
 
 @app.route("/api/courses/<int:course_id>", methods=["DELETE"])
 @login_required
