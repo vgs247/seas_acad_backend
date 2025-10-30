@@ -368,49 +368,32 @@ def update_module(module_id):
 
     data = request.get_json() or {}
     title = data.get("module_title")
-    subtitles = data.get("subtitles", [])
+    content = data.get("content")  # this is your JSON structure
 
-    # ✅ Update module title if provided
+    # Validate
+    if not title and not content:
+        return jsonify({"message": "Nothing to update"}), 400
+
+    # Prepare query parts dynamically
+    fields = []
+    params = []
+
     if title:
-        run_query(
-            "UPDATE modules SET module_title = %s WHERE id = %s",
-            (title, module_id),
-            commit=True
-        )
+        fields.append("module_title = %s")
+        params.append(title)
 
-    # ✅ Delete all related contents first, then subtitles
-    run_query("""
-        DELETE c FROM contents c
-        INNER JOIN subtitles s ON c.subtitle_id = s.id
-        WHERE s.module_id = %s
-    """, (module_id,), commit=True)
+    if content:
+        fields.append("content = %s")
+        params.append(json.dumps(content))  # store as JSON string
 
-    run_query("DELETE FROM subtitles WHERE module_id = %s", (module_id,), commit=True)
+    if not fields:
+        return jsonify({"message": "No valid fields"}), 400
 
-    # ✅ Reinsert subtitles and their contents
-    for sub in subtitles:
-        subtitle_title = sub.get("subtitle_title")
-        subtitle_number = sub.get("subtitle_number")
+    params.append(module_id)
 
-        # Insert subtitle and retrieve its new ID
-        run_query(
-            "INSERT INTO subtitles (module_id, subtitle_number, subtitle_title) VALUES (%s, %s, %s)",
-            (module_id, subtitle_number, subtitle_title),
-            commit=True
-        )
-
-        # Get the last inserted subtitle ID safely
-        sub_id = run_query("SELECT LAST_INSERT_ID() AS id", fetchone=True)["id"]
-
-        # Insert contents for this subtitle
-        for content in sub.get("contents", []):
-            ctype = content.get("type")
-            cdata = json.dumps(content.get("data"))  # serialize quill data
-            run_query(
-                "INSERT INTO contents (subtitle_id, type, data) VALUES (%s, %s, %s)",
-                (sub_id, ctype, cdata),
-                commit=True
-            )
+    # Build and run query
+    query = f"UPDATE modules SET {', '.join(fields)} WHERE id = %s"
+    run_query(query, tuple(params), commit=True)
 
     return jsonify({"message": "Module updated successfully"}), 200
 
