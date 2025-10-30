@@ -373,11 +373,12 @@ def update_module(module_id):
 
     # Update the module title if provided
     if title:
-        run_query(
-            "UPDATE modules SET module_title = %s, updated_at = NOW() WHERE id = %s",
-            (title, module_id),
-            commit=True
-        )
+    run_query(
+        "UPDATE modules SET module_title = %s WHERE id = %s",
+        (title, module_id),
+        commit=True
+    )
+
 
     # Delete old subtitles and contents (optional)
     run_query("DELETE FROM subtitles WHERE module_id = %s", (module_id,), commit=True)
