@@ -388,11 +388,15 @@ def update_module(module_id):
         subtitle_title = sub.get("subtitle_title")
         subtitle_number = sub.get("subtitle_number")
 
-        sub_id = run_query(
-            "INSERT INTO subtitles (module_id, subtitle_number, subtitle_title) VALUES (%s, %s, %s) RETURNING id",
-            (module_id, subtitle_number, subtitle_title),
-            fetchone=True
-        )["id"]
+        run_query(
+    "INSERT INTO subtitles (module_id, subtitle_number, subtitle_title) VALUES (%s, %s, %s)",
+    (module_id, subtitle_number, subtitle_title),
+    commit=True
+)
+
+     # then get the inserted I 
+        sub_id = run_query("SELECT LAST_INSERT_ID() AS id", fetchone=True)["id"]
+
 
         for content in sub.get("contents", []):
             ctype = content.get("type")
