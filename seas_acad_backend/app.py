@@ -360,61 +360,50 @@ def add_course():
         current_app.logger.exception("Error creating course")
         return jsonify({"message": "Error creating course", "error": str(e)}), 500
 
-@app.route("/api/courses/<int:course_id>", methods=["PUT", "PATCH"])
+@app.route("/api/modules/<int:module_id>", methods=["PUT", "PATCH"])
 @login_required
-def update_course(course_id):
+def update_module(module_id):
     if not getattr(g, "is_admin", False):
         return jsonify({"message": "admin only"}), 403
 
     data = request.get_json() or {}
 
-    allowed_fields = [
-        "title",
-        "description",
-        "duration",
-        "total_modules",
-        "amount",
-        "category",
-        "course_image"
-    ]
+    title = data.get("module_title")
+    subtitles = data.get("subtitles", [])
 
-    updates = []
-    values = []
+    # Update the module title if provided
+    if title:
+        run_query(
+            "UPDATE modules SET module_title = %s, updated_at = NOW() WHERE id = %s",
+            (title, module_id),
+            commit=True
+        )
 
-    for key in allowed_fields:
-        if key in data and data[key] is not None:
-            updates.append(f"{key} = %s")
-            values.append(data[key])
+    # Delete old subtitles and contents (optional)
+    run_query("DELETE FROM subtitles WHERE module_id = %s", (module_id,), commit=True)
 
-    if not updates:
-        return jsonify({"message": "no valid fields to update"}), 400
+    # Re-insert subtitles and contents
+    for sub in subtitles:
+        subtitle_title = sub.get("subtitle_title")
+        subtitle_number = sub.get("subtitle_number")
 
-    # Optional: update timestamp if you track modification time
-    updates.append("updated_at = NOW()")
+        sub_id = run_query(
+            "INSERT INTO subtitles (module_id, subtitle_number, subtitle_title) VALUES (%s, %s, %s) RETURNING id",
+            (module_id, subtitle_number, subtitle_title),
+            fetchone=True
+        )["id"]
 
-    values.append(course_id)
+        for content in sub.get("contents", []):
+            ctype = content.get("type")
+            data = json.dumps(content.get("data"))
+            run_query(
+                "INSERT INTO contents (subtitle_id, type, data) VALUES (%s, %s, %s)",
+                (sub_id, ctype, data),
+                commit=True
+            )
 
-    # Perform the update
-    rows_affected = run_query(
-        f"UPDATE courses SET {', '.join(updates)} WHERE id = %s",
-        tuple(values),
-        commit=True
-    )
+    return jsonify({"message": "Module updated successfully"}), 200
 
-    # Verify update and return fresh data
-    course = run_query(
-        "SELECT id AS course_id, title AS course_title, description, duration, total_modules, amount, category, course_image FROM courses WHERE id = %s",
-        (course_id,),
-        fetchone=True
-    )
-
-    if not course:
-        return jsonify({"message": "course not found"}), 404
-
-    return jsonify({
-        "message": "course updated successfully",
-        "course": course
-    }), 200
 
 @app.route("/api/courses/<int:course_id>", methods=["DELETE"])
 @login_required
