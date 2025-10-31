@@ -451,7 +451,7 @@ def add_module():
 
     data = request.get_json() or {}
 
-    # ✅ Accept both "subtitles" and "subtitle"
+    # Accept both "subtitles" and "subtitle"
     subtitles = data.get("subtitles") or data.get("subtitle")
 
     required = ["course_id", "module_number", "module_title"]
@@ -462,7 +462,7 @@ def add_module():
     if subtitles is None:
         return jsonify({"message": "subtitles required"}), 400
 
-    # ✅ Convert stringified JSON to actual list if needed
+    # Convert stringified JSON to actual list if needed
     if isinstance(subtitles, str):
         try:
             subtitles = json.loads(subtitles)
@@ -478,7 +478,8 @@ def add_module():
             data["course_id"],
             data["module_number"],
             data["module_title"],
-            json.dumps(subtitles, ensure_ascii=False)
+            json.dumps(subtitles, ensure_ascii=False, separators=(',', ':'))
+
         ), commit=True)
 
         return jsonify({
