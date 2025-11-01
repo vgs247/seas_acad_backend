@@ -795,6 +795,44 @@ def setup_admin():
     """, (generate_password_hash(pw),), commit=True)
     return jsonify({"message":"admin created, id=1"})
 
+
+
+@app.route("/api/upload", methods=["POST"])
+@login_required
+def upload_file():
+    """Upload a single file (image/pdf) and return its public URL"""
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return jsonify({"message": "No file uploaded"}), 400
+
+    if not allowed_file(file.filename):
+        return jsonify({"message": "File type not allowed"}), 400
+
+    # Generate a unique filename
+    ext = file.filename.rsplit(".", 1)[1].lower()
+    filename = secure_filename(f"upload_{uuid4().hex}.{ext}")
+    tmp_path = os.path.join("/tmp", filename)
+    file.save(tmp_path)
+
+    try:
+        # Upload to Bluehost
+        file_url = upload_file_to_bluehost(tmp_path, filename)
+
+        # Clean up temp file
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+        return jsonify({"url": file_url, "message": "File uploaded successfully"}), 201
+
+    except Exception as e:
+        current_app.logger.exception("Upload failed")
+        return jsonify({"message": "Error uploading file", "error": str(e)}), 500
+
+
+
 # --- Health & test ---
 @app.route("/api/health")
 def health():
