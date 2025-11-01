@@ -368,7 +368,7 @@ def update_module(module_id):
 
     data = request.get_json() or {}
     title = data.get("module_title")
-    content = data.get("content")  # this is your JSON structure
+    content = data.get("contents")  # this is your JSON structure
 
     # Validate
     if not title and not content:
