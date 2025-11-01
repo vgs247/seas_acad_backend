@@ -478,8 +478,7 @@ def add_module():
             data["course_id"],
             data["module_number"],
             data["module_title"],
-            json.dumps(subtitles, ensure_ascii=False, separators=(',', ':'))
-
+            json.dumps(subtitles, ensure_ascii=False)
         ), commit=True)
 
         return jsonify({
