@@ -398,6 +398,24 @@ def update_module(module_id):
     return jsonify({"message": "Module updated successfully"}), 200
 
 
+@app.route("/api/modules/<int:module_id>", methods=["DELETE"])
+@login_required
+def delete_module(module_id):
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+
+    # Check if module exists first
+    existing = run_query("SELECT id FROM modules WHERE id = %s", (module_id,), fetchone=True)
+    if not existing:
+        return jsonify({"message": "Module not found"}), 404
+
+    # Delete the module
+    run_query("DELETE FROM modules WHERE id = %s", (module_id,), commit=True)
+
+    return jsonify({"message": f"Module {module_id} deleted successfully"}), 200
+
+
+
 
 @app.route("/api/courses/<int:course_id>", methods=["DELETE"])
 @login_required
