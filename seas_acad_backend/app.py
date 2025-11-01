@@ -360,6 +360,89 @@ def add_course():
         current_app.logger.exception("Error creating course")
         return jsonify({"message": "Error creating course", "error": str(e)}), 500
 
+
+
+@app.route("/api/courses/<int:course_id>", methods=["PUT", "PATCH"])
+@login_required
+def update_course(course_id):
+    """Admin-only: update course details (and optionally image)"""
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+
+    try:
+        title = request.form.get("title")
+        description = request.form.get("description")
+        duration = request.form.get("duration")
+        total_modules = request.form.get("total_modules")
+        amount = request.form.get("amount")
+        category = request.form.get("category")
+        file = request.files.get("file")
+
+        # Build dynamic update fields
+        update_fields = []
+        values = []
+
+        if title:
+            update_fields.append("title=%s")
+            values.append(title)
+        if description:
+            update_fields.append("description=%s")
+            values.append(description)
+        if duration:
+            update_fields.append("duration=%s")
+            values.append(duration)
+        if total_modules:
+            update_fields.append("total_modules=%s")
+            values.append(total_modules)
+        if amount:
+            update_fields.append("amount=%s")
+            values.append(amount)
+        if category:
+            update_fields.append("category=%s")
+            values.append(category)
+
+        if not update_fields and not file:
+            return jsonify({"message": "No fields provided to update"}), 400
+
+        # --- Handle new image upload (optional) ---
+        if file and file.filename:
+            allowed_extensions = {"jpg", "jpeg", "png"}
+            ext = file.filename.rsplit(".", 1)[-1].lower()
+            if ext not in allowed_extensions:
+                return jsonify({"message": "File type not allowed"}), 400
+
+            filename = secure_filename(f"course_{course_id}_{uuid4().hex}.{ext}")
+            local_tmp = os.path.join("/tmp", filename)
+            file.save(local_tmp)
+
+            # Upload to Bluehost
+            course_image = upload_file_to_bluehost(local_tmp, filename)
+
+            # Add to update fields
+            update_fields.append("course_image=%s")
+            values.append(course_image)
+
+            # Clean up local file
+            if os.path.exists(local_tmp):
+                os.remove(local_tmp)
+
+        # Update in database
+        if update_fields:
+            query = f"UPDATE courses SET {', '.join(update_fields)} WHERE id=%s"
+            values.append(course_id)
+            run_query(query, tuple(values), commit=True)
+
+        return jsonify({
+            "message": "Course updated successfully",
+            "course_id": course_id
+        }), 200
+
+    except Exception as e:
+        current_app.logger.exception("Error updating course")
+        return jsonify({"message": "Error updating course", "error": str(e)}), 500
+
+
+
 @app.route("/api/modules/<int:module_id>", methods=["PUT", "PATCH"])
 @login_required
 def update_module(module_id):
