@@ -80,6 +80,16 @@ def get_db_connection():
         autocommit=False,
         connect_timeout=15
     )
+
+    # Tune per-session memory buffers (safe for shared hosting)
+    try:
+        with conn.cursor() as cur:
+            # Use moderate safe values (Bluehost limits)
+            cur.execute("SET SESSION sort_buffer_size = 262144;")  # 256 KB
+            cur.execute("SET SESSION read_buffer_size = 262144;")  # 256 KB
+    except Exception as e:
+        print(f"Warning: could not set session buffer sizes: {e}")
+
     return conn
 
 # --- Auth helpers ---
