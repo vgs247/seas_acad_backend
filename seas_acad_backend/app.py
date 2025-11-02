@@ -491,6 +491,69 @@ def update_module(module_id):
     return jsonify({"message": "Module updated successfully"}), 200
 
 
+
+
+@app.route("/api/modules/<int:module_id>/delete", methods=["DELETE"])
+@login_required
+def delete_module_content(module_id):
+    """Admin-only: delete a subtitle or specific content item inside a module"""
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+
+    try:
+        data = request.get_json() or {}
+        subtitle_number = data.get("subtitle_number")  # e.g. "1.3"
+        content_index = data.get("content_index")      # index within the 'contents' array (optional)
+
+        # Step 1: Fetch module content
+        module = run_query("SELECT content FROM modules WHERE id = %s", (module_id,), fetchone=True)
+        if not module:
+            return jsonify({"message": "Module not found"}), 404
+
+        contents = json.loads(module["content"] or "[]")
+        updated_contents = []
+
+        # Step 2: Locate the target subtitle
+        deleted = False
+        for sub in contents:
+            if sub.get("subtitle_number") == subtitle_number:
+                # If only subtitle_number given → delete entire subtitle
+                if content_index is None:
+                    deleted = True
+                    continue  # skip adding this subtitle (delete it)
+
+                # Otherwise → delete specific content item inside subtitle
+                sub_contents = sub.get("contents", [])
+                if 0 <= content_index < len(sub_contents):
+                    sub_contents.pop(content_index)
+                    sub["contents"] = sub_contents
+                    deleted = True
+
+            updated_contents.append(sub)
+
+        # Step 3: Validate
+        if not deleted:
+            return jsonify({"message": "Target not found"}), 404
+
+        # Step 4: Update DB
+        run_query(
+            "UPDATE modules SET content = %s WHERE id = %s",
+            (json.dumps(updated_contents), module_id),
+            commit=True
+        )
+
+        return jsonify({
+            "message": "Content deleted successfully",
+            "subtitle_number": subtitle_number,
+            "content_index": content_index
+        }), 200
+
+    except Exception as e:
+        current_app.logger.exception("Error deleting content")
+        return jsonify({"message": "Error deleting content", "error": str(e)}), 500
+
+
+
 @app.route("/api/modules/<int:module_id>", methods=["DELETE"])
 @login_required
 def delete_module(module_id):
