@@ -218,13 +218,13 @@ def login():
 
 
 
-# --- Courses CRUD (Admin endpoints protected by JWT for simplicity) ---
 @app.route("/api/courses", methods=["GET"])
 def list_courses():
     try:
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
 
+        # Fetch courses including is_published
         cursor.execute("""
             SELECT 
                 id AS course_id, 
@@ -234,7 +234,8 @@ def list_courses():
                 total_modules, 
                 amount, 
                 category, 
-                course_image 
+                course_image,
+                is_published
             FROM courses 
             ORDER BY created_at DESC
         """)
@@ -248,9 +249,10 @@ def list_courses():
         """)
         counts = {row["course_id"]: row["cnt"] for row in cursor.fetchall()}
 
-        # Attach counts
+        # Attach counts and convert is_published to True/False
         for c in courses:
             c["num_lessons"] = counts.get(c["course_id"], 0)
+            c["is_published"] = bool(c.get("is_published"))
 
         cursor.close()
         conn.close()
@@ -260,6 +262,7 @@ def list_courses():
     except Exception as e:
         print(f"Error in /api/courses: {e}")
         return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
+
     
     
 @app.route("/api/published_courses", methods=["GET"])
