@@ -261,7 +261,24 @@ def list_courses():
         print(f"Error in /api/courses: {e}")
         return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
 
-    
+@app.route("/api/published_courses", methods=["GET"])
+def list_published_courses():
+    """Return only published courses (public route)."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        cursor.execute("SELECT * FROM courses WHERE is_published = TRUE ORDER BY created_at DESC")
+        courses = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        return jsonify(courses), 200
+    except Exception as e:
+        current_app.logger.exception("Error listing published courses")
+        return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
+
     
     
 @app.route("/api/courses/<int:course_id>/publish", methods=["PATCH"])
