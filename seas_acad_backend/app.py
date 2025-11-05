@@ -307,11 +307,15 @@ def publish_course(course_id):
             commit=True
         )
 
+        # Retrieve the updated record (optional)
+        updated = run_query("SELECT * FROM courses WHERE id=%s", (course_id,), fetchone=True)
+        if updated:
+            updated["is_published"] = bool(updated.get("is_published"))
+
         status = "published" if publish else "unpublished"
         return jsonify({
             "message": f"Course {status} successfully",
-            "course_id": course_id,
-            "is_published": bool(publish)
+            "course": updated
         }), 200
 
     except Exception as e:
