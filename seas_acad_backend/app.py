@@ -260,7 +260,8 @@ def list_courses():
     except Exception as e:
         print(f"Error in /api/courses: {e}")
         return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
-
+    
+    
 @app.route("/api/published_courses", methods=["GET"])
 def list_published_courses():
     """Return only published courses (public route)."""
@@ -270,6 +271,10 @@ def list_published_courses():
 
         cursor.execute("SELECT * FROM courses WHERE is_published = TRUE ORDER BY created_at DESC")
         courses = cursor.fetchall()
+
+        # Convert is_published from 1/0 → True/False
+        for course in courses:
+            course["is_published"] = bool(course.get("is_published"))
 
         cursor.close()
         conn.close()
