@@ -264,7 +264,45 @@ def list_courses():
     
     
     
-    
+@app.route("/api/courses/<int:course_id>/publish", methods=["PATCH"])
+@login_required
+def publish_course(course_id):
+    """Admin-only: publish or unpublish a course."""
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+
+    data = request.get_json() or {}
+    publish = data.get("publish")
+
+    if publish is None:
+        return jsonify({"message": "Missing 'publish' (true/false)"}), 400
+
+    try:
+        # Ensure course exists
+        course = run_query("SELECT id, title FROM courses WHERE id=%s", (course_id,), fetchone=True)
+        if not course:
+            return jsonify({"message": "Course not found"}), 404
+
+        # Update publish status
+        run_query(
+            "UPDATE courses SET is_published=%s WHERE id=%s",
+            (bool(publish), course_id),
+            commit=True
+        )
+
+        status = "published" if publish else "unpublished"
+        return jsonify({
+            "message": f"Course {status} successfully",
+            "course_id": course_id,
+            "is_published": bool(publish)
+        }), 200
+
+    except Exception as e:
+        current_app.logger.exception("Error publishing course")
+        return jsonify({"message": "Error publishing course", "error": str(e)}), 500
+
+
+
 
 @app.route("/api/courses/<int:course_id>", methods=["GET"])
 def get_course(course_id):
