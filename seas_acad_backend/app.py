@@ -793,6 +793,63 @@ def add_module():
 
 
 
+@app.route("/api/user/modules/<int:course_id>", methods=["GET"])
+@login_required
+def get_user_course_modules(course_id):
+    """
+    Protected: Only logged-in users who are enrolled in the course can view modules.
+    """
+
+    user_id = g.user_id  # from token_required
+
+    # Check if the user is enrolled in this course
+    enrolled = run_query("""
+        SELECT 1 FROM enrollments
+        WHERE user_id = %s AND course_id = %s
+        LIMIT 1
+    """, (user_id, course_id), fetchone=True)
+
+    if not enrolled:
+        return jsonify({"error": "Access denied. You are not enrolled in this course."}), 403
+
+    # Fetch course modules
+    rows = run_query("""
+        SELECT id AS module_id,
+               module_number,
+               module_title,
+               content,
+               video_url,
+               pdf_url,
+               module_progress
+        FROM modules
+        WHERE course_id = %s
+        ORDER BY module_number ASC
+    """, (course_id,), fetchall=True)
+
+    def try_json_load(value):
+        """Helper: safely parse stringified JSON if possible."""
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return value
+        return value
+
+    for row in rows:
+        # Decode module-level JSON fields
+        row["content"] = try_json_load(row.get("content", []))
+        row["video_url"] = try_json_load(row.get("video_url"))
+        row["pdf_url"] = try_json_load(row.get("pdf_url"))
+
+        # Normalize deeply nested fields (like "data" in contents)
+        if isinstance(row["content"], list):
+            for sub in row["content"]:
+                if isinstance(sub, dict) and "contents" in sub:
+                    for item in sub["contents"]:
+                        if "data" in item:
+                            item["data"] = try_json_load(item["data"])
+
+    return jsonify(rows)
 
 
 
@@ -885,12 +942,21 @@ def enroll():
 @login_required
 def my_courses():
     rows = run_query("""
-        SELECT c.id AS course_id, c.course_image, c.description, c.category, uc.progress, c.title AS course_title
+        SELECT c.id AS course_id, 
+               c.course_image, 
+               c.description, 
+               c.category, 
+               uc.progress, 
+               c.title AS course_title,
+               COUNT(m.id) AS total_modules
         FROM user_courses uc
         JOIN courses c ON uc.course_id = c.id
+        LEFT JOIN modules m ON m.course_id = c.id
         WHERE uc.user_id = %s
+        GROUP BY c.id, c.course_image, c.description, c.category, uc.progress, c.title
     """, (g.user_id,), fetchall=True)
     return jsonify(rows)
+
 
 @app.route("/api/courses_started", methods=["GET"])
 @login_required
