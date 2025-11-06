@@ -930,14 +930,45 @@ def patch_module_progress(module_id):
 def enroll():
     data = request.get_json() or {}
     course_id = data.get("course_id")
+
     if not course_id:
-        return jsonify({"message":"course_id required"}), 400
-    # create enrollment if not exists
-    existing = run_query("SELECT id FROM user_courses WHERE user_id=%s AND course_id=%s", (g.user_id, course_id), fetchone=True)
+        return jsonify({"message": "course_id required"}), 400
+
+    #Check if the course exists and whether it's free
+    course = run_query(
+        "SELECT id, price FROM courses WHERE id=%s", 
+        (course_id,), 
+        fetchone=True
+    )
+
+    if not course:
+        return jsonify({"message": "Course not found"}), 404
+
+    #If course is paid, block direct enrollment
+    if course["price"] and float(course["price"]) > 0:
+        return jsonify({
+            "message": "This course requires payment before enrollment",
+            "requires_payment": True
+        }), 403
+
+    #Check if already enrolled
+    existing = run_query(
+        "SELECT id FROM user_courses WHERE user_id=%s AND course_id=%s", 
+        (g.user_id, course_id), 
+        fetchone=True
+    )
     if existing:
-        return jsonify({"message":"already enrolled"}), 200
-    run_query("INSERT INTO user_courses (user_id, course_id, progress) VALUES (%s,%s,%s)", (g.user_id, course_id, 0), commit=True)
-    return jsonify({"message":"enrolled"}), 201
+        return jsonify({"message": "Already enrolled"}), 200
+
+    #Enroll the user (for free course)
+    run_query(
+        "INSERT INTO user_courses (user_id, course_id, progress) VALUES (%s, %s, %s)",
+        (g.user_id, course_id, 0),
+        commit=True
+    )
+
+    return jsonify({"message": "Enrolled successfully"}), 201
+
 
 @app.route("/api/my_courses", methods=["GET"])
 @login_required
