@@ -266,7 +266,7 @@ def list_courses():
     
     
     
-    @app.route("/api/published_courses/<int:course_id>", methods=["GET"])
+@app.route("/api/published_courses/<int:course_id>", methods=["GET"])
 def get_published_course(course_id):
     """Return a single published course with details."""
     try:
