@@ -804,10 +804,11 @@ def get_user_course_modules(course_id):
 
     # Check if the user is enrolled in this course
     enrolled = run_query("""
-        SELECT 1 FROM enrollments
-        WHERE user_id = %s AND course_id = %s
-        LIMIT 1
+    SELECT 1 FROM user_courses
+    WHERE user_id = %s AND course_id = %s
+    LIMIT 1
     """, (user_id, course_id), fetchone=True)
+
 
     if not enrolled:
         return jsonify({"error": "Access denied. You are not enrolled in this course."}), 403
