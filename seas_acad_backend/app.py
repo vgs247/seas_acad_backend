@@ -265,6 +265,61 @@ def list_courses():
 
     
     
+    
+    @app.route("/api/published_courses/<int:course_id>", methods=["GET"])
+def get_published_course(course_id):
+    """Return a single published course with details."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # Fetch the course (only if published)
+        cursor.execute("""
+            SELECT 
+                id AS course_id,
+                title AS course_title,
+                description,
+                duration,
+                total_modules,
+                amount,
+                category,
+                course_image,
+                is_published,
+                created_at,
+                updated_at
+            FROM courses
+            WHERE id = %s AND is_published = TRUE
+        """, (course_id,))
+        course = cursor.fetchone()
+
+        if not course:
+            cursor.close()
+            conn.close()
+            return jsonify({"message": "Course not found or not published"}), 404
+
+        # Convert is_published to boolean
+        course["is_published"] = bool(course.get("is_published"))
+
+        # Fetch number of modules (optional)
+        cursor.execute("""
+            SELECT COUNT(*) AS module_count
+            FROM modules
+            WHERE course_id = %s
+        """, (course_id,))
+        module_count = cursor.fetchone()["module_count"]
+        course["num_lessons"] = module_count
+
+        cursor.close()
+        conn.close()
+
+        return jsonify(course), 200
+
+    except Exception as e:
+        print(f"Error in /api/published_courses/<course_id>: {e}")
+        return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
+
+
+    
 @app.route("/api/published_courses", methods=["GET"])
 def list_published_courses():
     """Return only published courses (public route)."""
