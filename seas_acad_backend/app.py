@@ -1129,6 +1129,145 @@ def upload_file():
 
 
 
+import os
+import requests
+import hmac
+import hashlib
+from flask import request, jsonify, current_app
+
+PAYSTACK_SECRET = os.getenv("PAYSTACK_SECRET_KEY")
+BASE_URL = os.getenv("BASE_URL", "https://example.com")
+
+# 1) INITIATE PAYMENT (called by frontend)
+@app.route("/api/paystack/initiate", methods=["POST"])
+@login_required
+def paystack_initiate():
+    data = request.get_json() or {}
+    course_id = data.get("course_id")
+    email = data.get("email") or g.username  # optional fallback
+    amount_naira = data.get("amount")  # e.g. "43.00"
+
+    if not course_id or not amount_naira:
+        return jsonify({"message":"course_id and amount required"}), 400
+
+    # convert to kobo (or cents)
+    try:
+        # Allow strings like "43.00" or numbers
+        amount_kobo = int(float(amount_naira) * 100)
+    except Exception:
+        return jsonify({"message":"invalid amount format"}), 400
+
+    # create a unique reference
+    reference = f"course_{course_id}_{g.user_id}_{int(datetime.utcnow().timestamp()*1000)}"
+
+    payload = {
+        "email": email,
+        "amount": amount_kobo,
+        "reference": reference,
+        "metadata": {
+            "user_id": g.user_id,
+            "course_id": course_id
+        },
+        # optional: "callback_url": f"{BASE_URL}/payment_callback"
+    }
+
+    headers = {
+        "Authorization": f"Bearer {PAYSTACK_SECRET}",
+        "Content-Type": "application/json"
+    }
+
+    resp = requests.post("https://api.paystack.co/transaction/initialize", json=payload, headers=headers, timeout=30)
+    res = resp.json()
+
+    # Save initial payment record in DB
+    try:
+        run_query(
+            "INSERT INTO payments (user_id, course_id, reference, amount, status, paystack_response) VALUES (%s,%s,%s,%s,%s,%s)",
+            (g.user_id, course_id, reference, amount_kobo, res.get("status") or "initialized", json.dumps(res)),
+            commit=True
+        )
+    except Exception as e:
+        current_app.logger.exception("Failed to create payment record")
+
+    return jsonify(res), resp.status_code
+
+# 2) VERIFY PAYMENT (call from frontend after checkout or use webhook)
+@app.route("/api/paystack/verify/<string:reference>", methods=["GET"])
+@login_required
+def paystack_verify(reference):
+    headers = {"Authorization": f"Bearer {PAYSTACK_SECRET}"}
+    resp = requests.get(f"https://api.paystack.co/transaction/verify/{reference}", headers=headers, timeout=30)
+    data = resp.json()
+
+    if not data.get("status"):
+        return jsonify({"message":"Verification failed", "data": data}), 400
+
+    txn = data.get("data", {})
+    status = txn.get("status")
+    amount = txn.get("amount")  # in kobo
+
+    # Update payments row
+    try:
+        run_query("UPDATE payments SET status=%s, paystack_response=%s WHERE reference=%s",
+                  (status, json.dumps(data), reference), commit=True)
+    except Exception:
+        current_app.logger.exception("Failed to update payment row")
+
+    if status == "success":
+        # Idempotent: ensure user_courses record exists
+        # check existing enrollment
+        existing = run_query("SELECT id FROM user_courses WHERE user_id=%s AND course_id=%s", (g.user_id, txn.get("metadata", {}).get("course_id")), fetchone=True)
+        if not existing:
+            run_query("INSERT INTO user_courses (user_id, course_id, progress) VALUES (%s, %s, %s)",
+                      (g.user_id, txn.get("metadata", {}).get("course_id"), 0), commit=True)
+
+        return jsonify({"message":"Payment verified and course granted", "data": data}), 200
+
+    return jsonify({"message":"Payment not successful", "data": data}), 400
+
+# 3) WEBHOOK endpoint (recommended)
+# Configure this in Paystack Dashboard -> Webhooks. Use the Render public URL + /api/paystack/webhook
+@app.route("/api/paystack/webhook", methods=["POST"])
+def paystack_webhook():
+    payload = request.get_data()
+    signature = request.headers.get("x-paystack-signature", "")
+
+    # Verify signature if you have secret (recommended)
+    webhook_secret = os.getenv("PAYSTACK_WEBHOOK_SECRET", "")
+    if webhook_secret:
+        mac = hmac.new(webhook_secret.encode(), payload, hashlib.sha512).hexdigest()
+        if not hmac.compare_digest(mac, signature):
+            current_app.logger.warning("Invalid Paystack webhook signature")
+            return "", 400
+
+    event = request.get_json() or {}
+    event_type = event.get("event")
+    data = event.get("data", {})
+
+    # handle transaction.success
+    if event_type == "charge.success" or event_type == "transaction.success":
+        reference = data.get("reference")
+        status = data.get("status")
+        metadata = data.get("metadata", {}) or {}
+        user_id = metadata.get("user_id")
+        course_id = metadata.get("course_id")
+
+        # Update payments row and enroll user idempotently
+        try:
+            run_query("UPDATE payments SET status=%s, paystack_response=%s WHERE reference=%s",
+                      (status, json.dumps(event), reference), commit=True)
+        except Exception:
+            current_app.logger.exception("Failed to update payment")
+
+        if status == "success" and user_id and course_id:
+            existing = run_query("SELECT id FROM user_courses WHERE user_id=%s AND course_id=%s", (user_id, course_id), fetchone=True)
+            if not existing:
+                run_query("INSERT INTO user_courses (user_id, course_id, progress) VALUES (%s,%s,%s)", (user_id, course_id, 0), commit=True)
+
+    return "", 200
+
+
+
 # --- Health & test ---
 @app.route("/api/health")
 def health():
