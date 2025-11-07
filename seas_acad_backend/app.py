@@ -819,70 +819,89 @@ def get_user_module(module_id):
     user_id = g.user_id
 
     try:
-        connection = get_db_connection()
+        # --- 1️⃣ Fetch the module and its course_id ---
+        module = run_query("""
+            SELECT 
+                id AS module_id,
+                course_id,
+                module_number,
+                module_title,
+                content,
+                video_url,
+                pdf_url
+            FROM modules
+            WHERE id=%s
+        """, (module_id,), fetchone=True)
 
-        # --- 1️⃣ Fetch module info ---
-        with connection.cursor(pymysql.cursors.DictCursor) as cursor:
-            cursor.execute("SELECT * FROM modules WHERE id = %s", (module_id,))
-            module = cursor.fetchone()
+        if not module:
+            return jsonify({"message": "Module not found"}), 404
 
-            if not module:
-                return jsonify({"message": "Module not found"}), 404
+        course_id = module["course_id"]
 
-        # --- 2️⃣ Parse JSON content safely ---
-        try:
-            raw_content = module.get("content")
-            json_content = json.loads(raw_content) if raw_content else []
-        except (json.JSONDecodeError, TypeError, KeyError):
-            json_content = []
+        # --- 2️⃣ Check enrollment ---
+        enrolled = run_query("""
+            SELECT 1 FROM user_courses 
+            WHERE user_id=%s AND course_id=%s
+        """, (user_id, course_id), fetchone=True)
 
-        # --- 3️⃣ Fetch actual subtitles from DB ---
-        with connection.cursor(pymysql.cursors.DictCursor) as cursor:
-            cursor.execute("""
-                SELECT 
-                    s.id AS subtitle_id,
-                    s.title,
-                    s.contents,
-                    CASE WHEN sp.subtitle_id IS NOT NULL THEN 1 ELSE 0 END AS is_completed
-                FROM subtitles s
-                LEFT JOIN subtitle_progress sp 
-                    ON sp.subtitle_id = s.id AND sp.user_id = %s
-                WHERE s.module_id = %s
-                ORDER BY s.id ASC
-            """, (user_id, module_id))
-            subtitles = cursor.fetchall()
+        if not enrolled:
+            return jsonify({"message": "You are not enrolled in this course"}), 403
 
-        # --- 4️⃣ Calculate progress ---
+        # --- 3️⃣ Fetch subtitles and progress for this module ---
+        subtitles = run_query("""
+            SELECT 
+                s.id AS subtitle_id,
+                s.title,
+                s.contents,
+                CASE WHEN sp.subtitle_id IS NOT NULL THEN 1 ELSE 0 END AS is_completed
+            FROM subtitles s
+            LEFT JOIN subtitle_progress sp 
+                ON sp.subtitle_id = s.id AND sp.user_id = %s
+            WHERE s.module_id = %s
+            ORDER BY s.id ASC
+        """, (user_id, module_id), fetchall=True)
+
+        # --- 4️⃣ Helper for safe JSON parsing ---
+        def try_json_load(value):
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except Exception:
+                    return value
+            return value
+
+        # --- 5️⃣ Parse JSON fields in the module ---
+        module["content"] = try_json_load(module.get("content", []))
+        module["video_url"] = try_json_load(module.get("video_url"))
+        module["pdf_url"] = try_json_load(module.get("pdf_url"))
+
+        # --- 6️⃣ Parse JSON fields in subtitles ---
+        for sub in subtitles:
+            sub["contents"] = try_json_load(sub.get("contents", {}))
+            sub["is_completed"] = bool(sub["is_completed"])
+
+        # --- 7️⃣ Calculate progress ---
         total_subtitles = len(subtitles)
-        completed_subtitles = sum(1 for s in subtitles if s["is_completed"])
-        progress = round((completed_subtitles / total_subtitles) * 100, 2) if total_subtitles > 0 else 0.0
+        completed = sum(1 for s in subtitles if s["is_completed"])
+        module_progress = round((completed / total_subtitles) * 100, 2) if total_subtitles else 0.0
 
-        # --- 5️⃣ Combine results ---
-        module_data = {
-            "module_id": module["id"],
-            "module_title": module.get("module_title") or module.get("title"),
-            "content": json_content,
-            "subtitles": [
-                {
-                    "subtitle_id": s["subtitle_id"],
-                    "title": s["title"],
-                    "contents": json.loads(s["contents"]) if s["contents"] else {},
-                    "is_completed": bool(s["is_completed"])
-                }
-                for s in subtitles
-            ],
-            "module_progress": progress
-        }
+        # --- 8️⃣ Attach subtitles + progress to module ---
+        module["subtitles"] = subtitles
+        module["module_progress"] = module_progress
 
-        return jsonify(module_data)
+        # --- 9️⃣ Normalize nested JSON in content list ---
+        if isinstance(module["content"], list):
+            for sub in module["content"]:
+                if isinstance(sub, dict) and "contents" in sub:
+                    for item in sub["contents"]:
+                        if "data" in item:
+                            item["data"] = try_json_load(item["data"])
+
+        return jsonify(module)
 
     except Exception as e:
         print("Error fetching module:", e)
         return jsonify({"message": "Server error", "error": str(e)}), 500
-
-    finally:
-        if 'connection' in locals() and connection:
-            connection.close()
 
 
 
