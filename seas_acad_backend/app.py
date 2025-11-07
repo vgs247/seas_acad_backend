@@ -798,10 +798,10 @@ def add_module():
 def get_user_course_modules(course_id):
     """
     Protected: Only logged-in users who are enrolled in the course can view modules.
-    Includes subtitles info (title + JSON contents) for each module.
+    Returns each module and its subtitles (with subtitle_id, title, and contents).
     """
 
-    user_id = g.user_id  # from token_required
+    user_id = g.user_id
 
     # Verify enrollment
     enrolled = run_query("""
@@ -813,7 +813,7 @@ def get_user_course_modules(course_id):
     if not enrolled:
         return jsonify({"error": "Access denied. You are not enrolled in this course."}), 403
 
-    # Fetch modules for the course
+    # Fetch modules for this course
     modules = run_query("""
         SELECT 
             m.id AS module_id,
@@ -833,14 +833,14 @@ def get_user_course_modules(course_id):
         SELECT 
             s.id AS subtitle_id,
             s.module_id,
-            s.title,
+            s.title AS subtitle_title,
             s.contents
         FROM subtitles s
-        INNER JOIN modules m ON s.module_id = m.id
-        WHERE m.course_id = %s
+        WHERE s.module_id IN (
+            SELECT id FROM modules WHERE course_id = %s
+        )
     """, (course_id,), fetchall=True)
 
-    # Helper: safely parse stringified JSON
     def try_json_load(value):
         if isinstance(value, str):
             try:
@@ -852,22 +852,21 @@ def get_user_course_modules(course_id):
     # Group subtitles by module_id
     subtitles_by_module = {}
     for s in subtitles:
-        subtitles_by_module.setdefault(s["module_id"], []).append({
+        module_id = s["module_id"]
+        subtitles_by_module.setdefault(module_id, []).append({
             "subtitle_id": s["subtitle_id"],
-            "title": s["title"],
+            "subtitle_title": s["subtitle_title"],
             "contents": try_json_load(s["contents"])
         })
 
-    # Combine module + subtitle info
+    # Attach subtitles and decode JSON fields
     for row in modules:
         row["content"] = try_json_load(row.get("content", []))
         row["video_url"] = try_json_load(row.get("video_url"))
         row["pdf_url"] = try_json_load(row.get("pdf_url"))
-
-        # Add subtitles
         row["subtitles"] = subtitles_by_module.get(row["module_id"], [])
 
-        # Normalize nested content data if present
+        # Normalize nested "content"
         if isinstance(row["content"], list):
             for sub in row["content"]:
                 if isinstance(sub, dict) and "contents" in sub:
