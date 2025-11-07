@@ -793,16 +793,17 @@ def add_module():
 
 
 
-@app.route("/api/user/modules/<int:course_id>", methods=["GET"]) 
+@app.route("/api/user/modules/<int:course_id>", methods=["GET"])
 @login_required
 def get_user_course_modules(course_id):
     """
     Protected: Only logged-in users who are enrolled in the course can view modules.
+    Includes subtitles info for each module.
     """
 
     user_id = g.user_id  # from token_required
 
-    # Check if the user is enrolled in this course
+    # Check enrollment
     enrolled = run_query("""
         SELECT 1 FROM user_courses
         WHERE user_id = %s AND course_id = %s
@@ -812,24 +813,44 @@ def get_user_course_modules(course_id):
     if not enrolled:
         return jsonify({"error": "Access denied. You are not enrolled in this course."}), 403
 
-    # Fetch course modules (now includes subtitle_id)
-    rows = run_query("""
+    # Fetch all modules
+    modules = run_query("""
         SELECT 
-            id AS module_id,
-            module_number,
-            module_title,
-            content,
-            video_url,
-            pdf_url,
-            module_progress,
-            subtitle_id
-        FROM modules
-        WHERE course_id = %s
-        ORDER BY module_number ASC
+            m.id AS module_id,
+            m.module_number,
+            m.module_title,
+            m.content,
+            m.video_url,
+            m.pdf_url,
+            m.module_progress
+        FROM modules m
+        WHERE m.course_id = %s
+        ORDER BY m.module_number ASC
     """, (course_id,), fetchall=True)
 
+    # Fetch subtitles for those modules
+    subtitles = run_query("""
+        SELECT 
+            s.id AS subtitle_id,
+            s.module_id,
+            s.language,
+            s.subtitle_url
+        FROM subtitles s
+        INNER JOIN modules m ON s.module_id = m.id
+        WHERE m.course_id = %s
+    """, (course_id,), fetchall=True)
+
+    # Group subtitles by module_id
+    subtitles_by_module = {}
+    for s in subtitles:
+        subtitles_by_module.setdefault(s["module_id"], []).append({
+            "subtitle_id": s["subtitle_id"],
+            "language": s["language"],
+            "subtitle_url": s["subtitle_url"]
+        })
+
     def try_json_load(value):
-        """Helper: safely parse stringified JSON if possible."""
+        """Safely parse stringified JSON if possible."""
         if isinstance(value, str):
             try:
                 return json.loads(value)
@@ -837,13 +858,16 @@ def get_user_course_modules(course_id):
                 return value
         return value
 
-    for row in rows:
-        # Decode module-level JSON fields
+    # Attach subtitles + decode JSON fields
+    for row in modules:
         row["content"] = try_json_load(row.get("content", []))
         row["video_url"] = try_json_load(row.get("video_url"))
         row["pdf_url"] = try_json_load(row.get("pdf_url"))
 
-        # Normalize deeply nested fields (like "data" in contents)
+        # Add subtitles list (empty if none)
+        row["subtitles"] = subtitles_by_module.get(row["module_id"], [])
+
+        # Decode nested JSON if needed
         if isinstance(row["content"], list):
             for sub in row["content"]:
                 if isinstance(sub, dict) and "contents" in sub:
@@ -851,7 +875,7 @@ def get_user_course_modules(course_id):
                         if "data" in item:
                             item["data"] = try_json_load(item["data"])
 
-    return jsonify(rows)
+    return jsonify(modules)
 
 
 
