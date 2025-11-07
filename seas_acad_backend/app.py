@@ -816,7 +816,8 @@ def add_module():
 @app.route("/api/user/modules/<int:module_id>", methods=["GET"])
 @login_required
 def get_user_module(module_id):
-    user_id = g.user["id"]
+    user_id = g.user_id
+
 
     try:
         # --- 1️⃣ Fetch module info ---
