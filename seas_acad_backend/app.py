@@ -818,8 +818,10 @@ def add_module():
 def get_user_module(module_id):
     user_id = g.user_id
 
-
     try:
+        # ✅ Create DB connection
+        connection = get_db_connection()
+
         # --- 1️⃣ Fetch module info ---
         with connection.cursor(pymysql.cursors.DictCursor) as cursor:
             cursor.execute("SELECT * FROM modules WHERE id = %s", (module_id,))
@@ -856,7 +858,7 @@ def get_user_module(module_id):
         module_data = {
             "module_id": module["id"],
             "module_title": module["title"],
-            "contents": json_content,       # legacy JSON version
+            "contents": json_content,  # legacy JSON version
             "subtitles": [
                 {
                     "subtitle_id": s["subtitle_id"],
@@ -874,6 +876,11 @@ def get_user_module(module_id):
     except Exception as e:
         print("Error fetching module:", e)
         return jsonify({"message": "Server error", "error": str(e)}), 500
+
+    finally:
+        # ✅ Always close the DB connection
+        if 'connection' in locals() and connection:
+            connection.close()
 
 
 
