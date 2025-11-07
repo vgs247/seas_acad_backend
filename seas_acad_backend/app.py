@@ -149,6 +149,26 @@ def run_query(query, params=None, fetchone=False, fetchall=False, commit=False):
     finally:
         conn.close()
 
+
+def migrate_json_subtitles_to_db():
+    with connection.cursor(pymysql.cursors.DictCursor) as cursor:
+        cursor.execute("SELECT id, contents FROM modules")
+        modules = cursor.fetchall()
+
+        for m in modules:
+            try:
+                subtitles = json.loads(m["contents"]) if m["contents"] else []
+                for sub in subtitles:
+                    title = sub.get("title", "Untitled")
+                    contents = json.dumps(sub)
+                    cursor.execute(
+                        "INSERT INTO subtitles (module_id, title, contents) VALUES (%s, %s, %s)",
+                        (m["id"], title, contents)
+                    )
+                connection.commit()
+            except Exception as e:
+                print("Error migrating module", m["id"], e)
+
 # --- Routes ---
 
 @app.route("/api/register", methods=["POST"])
