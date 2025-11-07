@@ -819,7 +819,6 @@ def get_user_module(module_id):
     user_id = g.user_id
 
     try:
-        # ✅ Create DB connection
         connection = get_db_connection()
 
         # --- 1️⃣ Fetch module info ---
@@ -832,8 +831,9 @@ def get_user_module(module_id):
 
         # --- 2️⃣ Parse existing JSON content (for backward compatibility) ---
         try:
-            json_content = json.loads(module["contents"]) if module["contents"] else []
-        except json.JSONDecodeError:
+            raw_contents = module.get("contents")  # ✅ safe
+            json_content = json.loads(raw_contents) if raw_contents else []
+        except (json.JSONDecodeError, TypeError, KeyError):
             json_content = []
 
         # --- 3️⃣ Fetch actual subtitles from database ---
@@ -858,7 +858,7 @@ def get_user_module(module_id):
         module_data = {
             "module_id": module["id"],
             "module_title": module["title"],
-            "contents": json_content,  # legacy JSON version
+            "contents": json_content,
             "subtitles": [
                 {
                     "subtitle_id": s["subtitle_id"],
@@ -878,7 +878,6 @@ def get_user_module(module_id):
         return jsonify({"message": "Server error", "error": str(e)}), 500
 
     finally:
-        # ✅ Always close the DB connection
         if 'connection' in locals() and connection:
             connection.close()
 
