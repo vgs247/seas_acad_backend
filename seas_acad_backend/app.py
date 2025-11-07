@@ -860,17 +860,18 @@ def get_user_modules(course_id):
             module_id = module["module_id"]
 
             subtitles = run_query("""
-                SELECT 
-                    s.id AS subtitle_id,
-                    s.title,
-                    s.contents,
-                    CASE WHEN sp.subtitle_id IS NOT NULL THEN 1 ELSE 0 END AS is_completed
-                FROM subtitles s
-                LEFT JOIN subtitle_progress sp 
-                    ON sp.subtitle_id = s.id AND sp.user_id = %s
-                WHERE s.module_id = %s
-                ORDER BY s.id ASC
-            """, (user_id, module_id), fetchall=True)
+    SELECT 
+        s.id AS subtitle_id,
+        s.title,
+        s.contents,
+        CASE WHEN sp.subtitle_id IS NOT NULL THEN 1 ELSE 0 END AS is_completed
+    FROM subtitles s
+    LEFT JOIN subtitle_progress sp 
+        ON sp.subtitle_id = s.id AND sp.user_id = %s
+    WHERE s.module_id = %s
+    ORDER BY s.id ASC
+""", (user_id, module_id), fetchall=True)
+
 
             # Parse JSON content
             module["content"] = try_json_load(module.get("content", []))
