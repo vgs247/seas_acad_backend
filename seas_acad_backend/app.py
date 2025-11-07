@@ -1599,6 +1599,30 @@ def paystack_webhook():
 
 
 
+@app.route("/api/test-db", methods=["GET"])
+def test_db_connection():
+    try:
+        conn = get_db_connection()
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT NOW() AS server_time;")
+            result = cursor.fetchone()
+        return jsonify({
+            "status": "success",
+            "message": "Database connection successful ✅",
+            "server_time": str(result["server_time"])
+        }), 200
+    except Exception as e:
+        print("Database connection test failed:", e)
+        return jsonify({
+            "status": "error",
+            "message": "Database connection failed ❌",
+            "error": str(e)
+        }), 500
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
+
+
 # --- Health & test ---
 @app.route("/api/health")
 def health():
