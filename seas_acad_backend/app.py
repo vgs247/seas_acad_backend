@@ -829,10 +829,10 @@ def get_user_module(module_id):
             if not module:
                 return jsonify({"message": "Module not found"}), 404
 
-        # --- 2️⃣ Parse existing JSON content (for backward compatibility) ---
+        # --- 2️⃣ Parse JSON content safely (backward compatibility) ---
         try:
-            raw_contents = module.get("contents")  # ✅ safe
-            json_content = json.loads(raw_contents) if raw_contents else []
+            raw_content = module.get("content")  # ✅ use correct column name
+            json_content = json.loads(raw_content) if raw_content else []
         except (json.JSONDecodeError, TypeError, KeyError):
             json_content = []
 
@@ -857,8 +857,8 @@ def get_user_module(module_id):
         # --- 5️⃣ Combine results ---
         module_data = {
             "module_id": module["id"],
-            "module_title": module["title"],
-            "contents": json_content,
+            "module_title": module["module_title"] if "module_title" in module else module.get("title"),
+            "content": json_content,   # ✅ consistent with DB column name
             "subtitles": [
                 {
                     "subtitle_id": s["subtitle_id"],
