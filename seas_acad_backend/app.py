@@ -813,14 +813,23 @@ def add_module():
 
 
 
-@app.route("/api/user/modules/<int:module_id>", methods=["GET"])
+@app.route("/api/user/modules/<int:course_id>", methods=["GET"])
 @login_required
-def get_user_module(module_id):
+def get_user_modules(course_id):
     user_id = g.user_id
 
     try:
-        # --- 1️⃣ Fetch the module and its course_id ---
-        module = run_query("""
+        # --- 1️⃣ Verify enrollment ---
+        enrolled = run_query("""
+            SELECT 1 FROM user_courses 
+            WHERE user_id=%s AND course_id=%s
+        """, (user_id, course_id), fetchone=True)
+
+        if not enrolled:
+            return jsonify({"message": "You are not enrolled in this course"}), 403
+
+        # --- 2️⃣ Fetch all modules for that course ---
+        modules = run_query("""
             SELECT 
                 id AS module_id,
                 course_id,
@@ -830,38 +839,14 @@ def get_user_module(module_id):
                 video_url,
                 pdf_url
             FROM modules
-            WHERE id=%s
-        """, (module_id,), fetchone=True)
+            WHERE course_id=%s
+            ORDER BY module_number ASC
+        """, (course_id,), fetchall=True)
 
-        if not module:
-            return jsonify({"message": "Module not found"}), 404
+        if not modules:
+            return jsonify({"message": "No modules found for this course"}), 404
 
-        course_id = module["course_id"]
-
-        # --- 2️⃣ Check enrollment ---
-        enrolled = run_query("""
-            SELECT 1 FROM user_courses 
-            WHERE user_id=%s AND course_id=%s
-        """, (user_id, course_id), fetchone=True)
-
-        if not enrolled:
-            return jsonify({"message": "You are not enrolled in this course"}), 403
-
-        # --- 3️⃣ Fetch subtitles and progress for this module ---
-        subtitles = run_query("""
-            SELECT 
-                s.id AS subtitle_id,
-                s.title,
-                s.contents,
-                CASE WHEN sp.subtitle_id IS NOT NULL THEN 1 ELSE 0 END AS is_completed
-            FROM subtitles s
-            LEFT JOIN subtitle_progress sp 
-                ON sp.subtitle_id = s.id AND sp.user_id = %s
-            WHERE s.module_id = %s
-            ORDER BY s.id ASC
-        """, (user_id, module_id), fetchall=True)
-
-        # --- 4️⃣ Helper for safe JSON parsing ---
+        # --- 3️⃣ Helper for safe JSON parsing ---
         def try_json_load(value):
             if isinstance(value, str):
                 try:
@@ -870,39 +855,54 @@ def get_user_module(module_id):
                     return value
             return value
 
-        # --- 5️⃣ Parse JSON fields in the module ---
-        module["content"] = try_json_load(module.get("content", []))
-        module["video_url"] = try_json_load(module.get("video_url"))
-        module["pdf_url"] = try_json_load(module.get("pdf_url"))
+        # --- 4️⃣ Fetch subtitles and progress for all modules ---
+        for module in modules:
+            module_id = module["module_id"]
 
-        # --- 6️⃣ Parse JSON fields in subtitles ---
-        for sub in subtitles:
-            sub["contents"] = try_json_load(sub.get("contents", {}))
-            sub["is_completed"] = bool(sub["is_completed"])
+            subtitles = run_query("""
+                SELECT 
+                    s.id AS subtitle_id,
+                    s.title,
+                    s.contents,
+                    CASE WHEN sp.subtitle_id IS NOT NULL THEN 1 ELSE 0 END AS is_completed
+                FROM subtitles s
+                LEFT JOIN subtitle_progress sp 
+                    ON sp.subtitle_id = s.id AND sp.user_id = %s
+                WHERE s.module_id = %s
+                ORDER BY s.id ASC
+            """, (user_id, module_id), fetchall=True)
 
-        # --- 7️⃣ Calculate progress ---
-        total_subtitles = len(subtitles)
-        completed = sum(1 for s in subtitles if s["is_completed"])
-        module_progress = round((completed / total_subtitles) * 100, 2) if total_subtitles else 0.0
+            # Parse JSON content
+            module["content"] = try_json_load(module.get("content", []))
+            module["video_url"] = try_json_load(module.get("video_url"))
+            module["pdf_url"] = try_json_load(module.get("pdf_url"))
 
-        # --- 8️⃣ Attach subtitles + progress to module ---
-        module["subtitles"] = subtitles
-        module["module_progress"] = module_progress
+            # Parse subtitles JSON and completion state
+            for sub in subtitles:
+                sub["contents"] = try_json_load(sub.get("contents", {}))
+                sub["is_completed"] = bool(sub["is_completed"])
 
-        # --- 9️⃣ Normalize nested JSON in content list ---
-        if isinstance(module["content"], list):
-            for sub in module["content"]:
-                if isinstance(sub, dict) and "contents" in sub:
-                    for item in sub["contents"]:
-                        if "data" in item:
-                            item["data"] = try_json_load(item["data"])
+            # Calculate progress
+            total = len(subtitles)
+            done = sum(1 for s in subtitles if s["is_completed"])
+            progress = round((done / total) * 100, 2) if total else 0.0
 
-        return jsonify(module)
+            module["subtitles"] = subtitles
+            module["module_progress"] = progress
+
+            # Optional: Normalize nested JSON data in module["content"]
+            if isinstance(module["content"], list):
+                for sub in module["content"]:
+                    if isinstance(sub, dict) and "contents" in sub:
+                        for item in sub["contents"]:
+                            if "data" in item:
+                                item["data"] = try_json_load(item["data"])
+
+        return jsonify(modules)
 
     except Exception as e:
-        print("Error fetching module:", e)
+        print("Error fetching user modules:", e)
         return jsonify({"message": "Server error", "error": str(e)}), 500
-
 
 
 
