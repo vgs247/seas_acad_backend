@@ -793,7 +793,7 @@ def add_module():
 
 
 
-@app.route("/api/user/modules/<int:course_id>", methods=["GET"])
+@app.route("/api/user/modules/<int:course_id>", methods=["GET"]) 
 @login_required
 def get_user_course_modules(course_id):
     """
@@ -804,24 +804,25 @@ def get_user_course_modules(course_id):
 
     # Check if the user is enrolled in this course
     enrolled = run_query("""
-    SELECT 1 FROM user_courses
-    WHERE user_id = %s AND course_id = %s
-    LIMIT 1
+        SELECT 1 FROM user_courses
+        WHERE user_id = %s AND course_id = %s
+        LIMIT 1
     """, (user_id, course_id), fetchone=True)
-
 
     if not enrolled:
         return jsonify({"error": "Access denied. You are not enrolled in this course."}), 403
 
-    # Fetch course modules
+    # Fetch course modules (now includes subtitle_id)
     rows = run_query("""
-        SELECT id AS module_id,
-               module_number,
-               module_title,
-               content,
-               video_url,
-               pdf_url,
-               module_progress
+        SELECT 
+            id AS module_id,
+            module_number,
+            module_title,
+            content,
+            video_url,
+            pdf_url,
+            module_progress,
+            subtitle_id
         FROM modules
         WHERE course_id = %s
         ORDER BY module_number ASC
