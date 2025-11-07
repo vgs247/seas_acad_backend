@@ -912,8 +912,6 @@ def db_test():
 
 
 
-
-
 @app.route("/api/module_progress/<int:module_id>", methods=["PATCH"])
 @login_required
 def patch_module_progress(module_id):
@@ -970,6 +968,7 @@ def enroll():
     return jsonify({"message": "Enrolled successfully"}), 201
 
 
+
 @app.route("/api/my_courses", methods=["GET"])
 @login_required
 def my_courses():
@@ -990,6 +989,140 @@ def my_courses():
     return jsonify(rows)
 
 
+
+# ========================================
+# PROGRESS TRACKING ENDPOINTS
+# ========================================
+
+@app.route("/api/user/progress/<int:course_id>", methods=["GET"])
+@login_required
+def get_user_progress(course_id):
+    """Get user's progress for a specific course"""
+    try:
+        # Check if user is enrolled
+        enrollment = run_query("""
+            SELECT progress 
+            FROM user_courses 
+            WHERE user_id=%s AND course_id=%s
+        """, (g.user_id, course_id), fetchone=True)
+        
+        if not enrollment:
+            return jsonify({"message": "Not enrolled in this course"}), 403
+        
+        # Get completed subtitles for this user and course
+        completed = run_query("""
+            SELECT subtitle_id, completed_at 
+            FROM subtitle_progress 
+            WHERE user_id=%s AND course_id=%s
+        """, (g.user_id, course_id), fetchall=True)
+        
+        return jsonify({
+            "progress": enrollment["progress"],
+            "completed_subtitles": completed or []
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.exception("Error fetching progress")
+        return jsonify({"message": "Error fetching progress", "error": str(e)}), 500
+
+
+@app.route("/api/user/complete_subtitle", methods=["POST"])
+@login_required
+def mark_subtitle_complete():
+    """Mark a subtitle as complete and update course progress"""
+    data = request.get_json() or {}
+    course_id = data.get("course_id")
+    subtitle_id = data.get("subtitle_id")
+    
+    if not course_id or not subtitle_id:
+        return jsonify({"message": "course_id and subtitle_id required"}), 400
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+        
+        # Check if user is enrolled
+        cursor.execute("""
+            SELECT id FROM user_courses 
+            WHERE user_id=%s AND course_id=%s
+        """, (g.user_id, course_id))
+        
+        if not cursor.fetchone():
+            cursor.close()
+            conn.close()
+            return jsonify({"message": "Not enrolled in this course"}), 403
+        
+        # Check if already completed (idempotent)
+        cursor.execute("""
+            SELECT id FROM subtitle_progress 
+            WHERE user_id=%s AND course_id=%s AND subtitle_id=%s
+        """, (g.user_id, course_id, subtitle_id))
+        
+        already_completed = cursor.fetchone()
+        
+        if not already_completed:
+            # Mark as complete
+            cursor.execute("""
+                INSERT INTO subtitle_progress (user_id, course_id, subtitle_id, completed_at)
+                VALUES (%s, %s, %s, NOW())
+            """, (g.user_id, course_id, subtitle_id))
+        
+        # Calculate total subtitles in course
+        cursor.execute("""
+            SELECT content FROM modules WHERE course_id=%s
+        """, (course_id,))
+        
+        modules = cursor.fetchall()
+        total_subtitles = 0
+        
+        for module in modules:
+            content = module.get("content")
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except:
+                    content = []
+            
+            if isinstance(content, list):
+                total_subtitles += len(content)
+        
+        # Count completed subtitles
+        cursor.execute("""
+            SELECT COUNT(*) as completed_count 
+            FROM subtitle_progress 
+            WHERE user_id=%s AND course_id=%s
+        """, (g.user_id, course_id))
+        
+        completed_count = cursor.fetchone()["completed_count"]
+        
+        # Calculate progress percentage
+        progress = 0
+        if total_subtitles > 0:
+            progress = round((completed_count / total_subtitles) * 100, 2)
+        
+        # Update course progress
+        cursor.execute("""
+            UPDATE user_courses 
+            SET progress=%s 
+            WHERE user_id=%s AND course_id=%s
+        """, (progress, g.user_id, course_id))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return jsonify({
+            "message": "Subtitle marked as complete",
+            "progress": progress,
+            "completed_subtitles": completed_count,
+            "total_subtitles": total_subtitles
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.exception("Error marking subtitle complete")
+        return jsonify({"message": "Error marking subtitle complete", "error": str(e)}), 500
+    
+    
 @app.route("/api/courses_started", methods=["GET"])
 @login_required
 def courses_started():
