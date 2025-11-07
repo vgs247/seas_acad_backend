@@ -829,18 +829,21 @@ def get_user_module(module_id):
             if not module:
                 return jsonify({"message": "Module not found"}), 404
 
-        # --- 2️⃣ Parse JSON content safely (backward compatibility) ---
+        # --- 2️⃣ Parse JSON content safely ---
         try:
-            raw_content = module.get("content")  # ✅ use correct column name
+            raw_content = module.get("content")
             json_content = json.loads(raw_content) if raw_content else []
         except (json.JSONDecodeError, TypeError, KeyError):
             json_content = []
 
-        # --- 3️⃣ Fetch actual subtitles from database ---
+        # --- 3️⃣ Fetch actual subtitles from DB ---
         with connection.cursor(pymysql.cursors.DictCursor) as cursor:
             cursor.execute("""
-                SELECT s.id AS subtitle_id, s.title, s.contents, 
-                       IFNULL(sp.is_completed, 0) AS is_completed
+                SELECT 
+                    s.id AS subtitle_id,
+                    s.title,
+                    s.contents,
+                    CASE WHEN sp.subtitle_id IS NOT NULL THEN 1 ELSE 0 END AS is_completed
                 FROM subtitles s
                 LEFT JOIN subtitle_progress sp 
                     ON sp.subtitle_id = s.id AND sp.user_id = %s
@@ -857,8 +860,8 @@ def get_user_module(module_id):
         # --- 5️⃣ Combine results ---
         module_data = {
             "module_id": module["id"],
-            "module_title": module["module_title"] if "module_title" in module else module.get("title"),
-            "content": json_content,   # ✅ consistent with DB column name
+            "module_title": module.get("module_title") or module.get("title"),
+            "content": json_content,
             "subtitles": [
                 {
                     "subtitle_id": s["subtitle_id"],
@@ -880,7 +883,6 @@ def get_user_module(module_id):
     finally:
         if 'connection' in locals() and connection:
             connection.close()
-
 
 
 
