@@ -1387,10 +1387,6 @@ def setup_admin():
 @app.route("/api/upload", methods=["POST"])
 @login_required
 def upload_file():
-    """Upload a single file (image/pdf) and return its public URL"""
-    if not getattr(g, "is_admin", False):
-        return jsonify({"message": "admin only"}), 403
-
     file = request.files.get("file")
     if not file or not file.filename:
         return jsonify({"message": "No file uploaded"}), 400
