@@ -1255,17 +1255,15 @@ def get_profile():
         return jsonify({"message": "User not found"}), 404
 
     full_name = f"{user['first_name']} {user['last_name']}".strip()
-    profile_pic_url = (
-        f"{request.host_url.rstrip('/')}/{user['profile_pic']}"
-        if user["profile_pic"] else None
-    )
+    
+    # Return the stored URL directly (already uploaded to Bluehost)
+    profile_pic_url = user["profile_pic"] if user["profile_pic"] else None
 
     return jsonify({
         "full_name": full_name,
         "email": user["email"],
         "profile_pic": profile_pic_url
     }), 200
-
 
 # -------------------------------
 # CHANGE PASSWORD
@@ -1324,46 +1322,72 @@ def update_profile():
         first_name = name_parts[0]
         last_name = name_parts[1] if len(name_parts) > 1 else ""
 
-        profile_pic_path = None
+        profile_pic_url = None
 
-        # Handle image upload
-        if file and allowed_file(file.filename):
-            filename = secure_filename(f"user_{g.user_id}_" + file.filename)
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
-            file.save(filepath)
-            profile_pic_path = f"{UPLOAD_FOLDER}/{filename}"
+        # Handle image upload to Bluehost
+        if file and file.filename:
+            allowed_extensions = {"jpg", "jpeg", "png", "gif"}
+            ext = file.filename.rsplit(".", 1)[-1].lower()
             
-        
-            os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+            if ext not in allowed_extensions:
+                return jsonify({"message": "File type not allowed. Use jpg, jpeg, png, or gif"}), 400
 
+            # Generate unique filename
+            filename = secure_filename(f"profile_{g.user_id}_{uuid4().hex}.{ext}")
+            local_tmp = os.path.join("/tmp", filename)
+            
+            # Save temporarily
+            file.save(local_tmp)
 
-            # Update database with new image path
+            # Upload to Bluehost FTP
+            try:
+                profile_pic_url = upload_file_to_bluehost(local_tmp, filename)
+            except Exception as upload_error:
+                current_app.logger.exception("Failed to upload to Bluehost")
+                return jsonify({
+                    "message": "Error uploading profile picture",
+                    "error": str(upload_error)
+                }), 500
+            finally:
+                # Clean up temp file
+                if os.path.exists(local_tmp):
+                    os.remove(local_tmp)
+
+            # Update database with new image URL
             run_query(
                 "UPDATE users SET first_name=%s, last_name=%s, email=%s, profile_pic=%s WHERE id=%s",
-                (first_name, last_name, email, profile_pic_path, g.user_id),
+                (first_name, last_name, email, profile_pic_url, g.user_id),
                 commit=True
             )
         else:
-            # Update only name and email
+            # Update only name and email (no image)
             run_query(
                 "UPDATE users SET first_name=%s, last_name=%s, email=%s WHERE id=%s",
                 (first_name, last_name, email, g.user_id),
                 commit=True
             )
+            
+            # Fetch existing profile pic
+            user = run_query(
+                "SELECT profile_pic FROM users WHERE id=%s",
+                (g.user_id,),
+                fetchone=True
+            )
+            profile_pic_url = user["profile_pic"] if user else None
 
         return jsonify({
             "message": "Profile updated successfully",
             "full_name": f"{first_name} {last_name}".strip(),
             "email": email,
-            "profile_pic": profile_pic_path
+            "profile_pic": profile_pic_url
         }), 200
 
     except Exception as e:
+        current_app.logger.exception("Error updating profile")
         return jsonify({
             "message": "Error updating profile",
             "error": str(e)
         }), 500
-        
         
         
 
