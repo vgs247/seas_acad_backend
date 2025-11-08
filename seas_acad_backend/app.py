@@ -812,99 +812,62 @@ def add_module():
         return jsonify({"message": "Error creating module", "error": str(e)}), 500
 
 
-
 @app.route("/api/user/modules/<int:course_id>", methods=["GET"])
 @login_required
-def get_user_modules(course_id):
+def get_user_course_modules(course_id):
+    """
+    Protected: Only logged-in users who are enrolled in the course can view modules.
+    """
     user_id = g.user_id
 
-    try:
-        # --- 1️⃣ Verify enrollment ---
-        enrolled = run_query("""
-            SELECT 1 FROM user_courses 
-            WHERE user_id=%s AND course_id=%s
-        """, (user_id, course_id), fetchone=True)
+    # Check if the user is enrolled in this course
+    enrolled = run_query("""
+        SELECT 1 FROM user_courses
+        WHERE user_id = %s AND course_id = %s
+        LIMIT 1
+    """, (user_id, course_id), fetchone=True)
 
-        if not enrolled:
-            return jsonify({"message": "You are not enrolled in this course"}), 403
+    if not enrolled:
+        return jsonify({"message": "You are not enrolled in this course"}), 403
 
-        # --- 2️⃣ Fetch all modules for that course ---
-        modules = run_query("""
-            SELECT 
-                id AS module_id,
-                course_id,
-                module_number,
-                module_title,
-                content,
-                video_url,
-                pdf_url
-            FROM modules
-            WHERE course_id=%s
-            ORDER BY module_number ASC
-        """, (course_id,), fetchall=True)
+    # Fetch course modules (same as public endpoint)
+    rows = run_query("""
+        SELECT id AS module_id,
+               module_number,
+               module_title,
+               content,
+               video_url,
+               pdf_url,
+               module_progress
+        FROM modules
+        WHERE course_id = %s
+        ORDER BY module_number ASC
+    """, (course_id,), fetchall=True)
 
-        if not modules:
-            return jsonify({"message": "No modules found for this course"}), 404
+    def try_json_load(value):
+        """Helper: safely parse stringified JSON if possible."""
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except Exception:
+                return value
+        return value
 
-        # --- 3️⃣ Helper for safe JSON parsing ---
-        def try_json_load(value):
-            if isinstance(value, str):
-                try:
-                    return json.loads(value)
-                except Exception:
-                    return value
-            return value
+    for row in rows:
+        # Decode module-level JSON fields
+        row["content"] = try_json_load(row.get("content", []))
+        row["video_url"] = try_json_load(row.get("video_url"))
+        row["pdf_url"] = try_json_load(row.get("pdf_url"))
 
-        # --- 4️⃣ Fetch subtitles and progress for all modules ---
-        for module in modules:
-            module_id = module["module_id"]
+        # Normalize deeply nested fields (like "data" in contents)
+        if isinstance(row["content"], list):
+            for sub in row["content"]:
+                if isinstance(sub, dict) and "contents" in sub:
+                    for item in sub["contents"]:
+                        if "data" in item:
+                            item["data"] = try_json_load(item["data"])
 
-            subtitles = run_query("""
-    SELECT 
-        s.id AS subtitle_id,
-        s.title,
-        s.contents,
-        CASE WHEN sp.subtitle_id IS NOT NULL THEN 1 ELSE 0 END AS is_completed
-    FROM subtitles s
-    LEFT JOIN subtitle_progress sp 
-        ON sp.subtitle_id = s.id AND sp.user_id = %s
-    WHERE s.module_id = %s
-    ORDER BY s.id ASC
-""", (user_id, module_id), fetchall=True)
-
-
-            # Parse JSON content
-            module["content"] = try_json_load(module.get("content", []))
-            module["video_url"] = try_json_load(module.get("video_url"))
-            module["pdf_url"] = try_json_load(module.get("pdf_url"))
-
-            # Parse subtitles JSON and completion state
-            for sub in subtitles:
-                sub["contents"] = try_json_load(sub.get("contents", {}))
-                sub["is_completed"] = bool(sub["is_completed"])
-
-            # Calculate progress
-            total = len(subtitles)
-            done = sum(1 for s in subtitles if s["is_completed"])
-            progress = round((done / total) * 100, 2) if total else 0.0
-
-            module["subtitles"] = subtitles
-            module["module_progress"] = progress
-
-            # Optional: Normalize nested JSON data in module["content"]
-            if isinstance(module["content"], list):
-                for sub in module["content"]:
-                    if isinstance(sub, dict) and "contents" in sub:
-                        for item in sub["contents"]:
-                            if "data" in item:
-                                item["data"] = try_json_load(item["data"])
-
-        return jsonify(modules)
-
-    except Exception as e:
-        print("Error fetching user modules:", e)
-        return jsonify({"message": "Server error", "error": str(e)}), 500
-
+    return jsonify(rows)
 
 
 
@@ -1556,6 +1519,9 @@ def paystack_verify(reference):
 
     return jsonify({"message":"Payment not successful", "data": data}), 400
 
+
+
+
 # 3) WEBHOOK endpoint (recommended)
 # Configure this in Paystack Dashboard -> Webhooks. Use the Render public URL + /api/paystack/webhook
 @app.route("/api/paystack/webhook", methods=["POST"])
@@ -1596,7 +1562,6 @@ def paystack_webhook():
                 run_query("INSERT INTO user_courses (user_id, course_id, progress) VALUES (%s,%s,%s)", (user_id, course_id, 0), commit=True)
 
     return "", 200
-
 
 
 @app.route("/api/test-db", methods=["GET"])
