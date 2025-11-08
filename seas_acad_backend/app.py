@@ -1025,13 +1025,12 @@ def my_courses():
 # ========================================
 # PROGRESS TRACKING ENDPOINTS
 # ========================================
-
 @app.route("/api/user/progress/<int:course_id>", methods=["GET"])
 @login_required
 def get_user_progress(course_id):
     """Get user's progress for a specific course"""
     try:
-        # ✅ Check enrollment
+        # Check if user is enrolled
         enrollment = run_query("""
             SELECT progress 
             FROM user_courses 
@@ -1040,57 +1039,52 @@ def get_user_progress(course_id):
         
         if not enrollment:
             return jsonify({"message": "Not enrolled in this course"}), 403
-
-        # ✅ Get completed subtitles
+        
+        # Get completed subtitles for this user and course
         completed = run_query("""
             SELECT subtitle_id, completed_at 
             FROM subtitle_progress 
             WHERE user_id=%s AND course_id=%s
         """, (g.user_id, course_id), fetchall=True)
-
-        # ✅ Get total subtitle count (DB-first, fallback to JSON)
-        db_count = run_query("""
-            SELECT COUNT(*) AS total 
-            FROM subtitles s
-            INNER JOIN modules m ON s.module_id = m.id
-            WHERE m.course_id = %s
-        """, (course_id,), fetchone=True)
-
-        total_subtitles = db_count["total"] or 0
-
-        # fallback: if no subtitles found in DB, use legacy JSON content count
-        if total_subtitles == 0:
-            modules = run_query("SELECT content FROM modules WHERE course_id=%s", (course_id,), fetchall=True)
-            for module in modules:
-                content = module.get("content")
-                if isinstance(content, str):
-                    try:
-                        content = json.loads(content)
-                    except:
-                        content = []
-                if isinstance(content, list):
-                    total_subtitles += len(content)
-
-        # ✅ Calculate accurate progress (for live recomputation)
+        
+        # Calculate total subtitles from JSON content
+        modules = run_query("""
+            SELECT id, content FROM modules WHERE course_id=%s
+        """, (course_id,), fetchall=True)
+        
+        total_subtitles = 0
+        for module in modules:
+            content = module.get("content")
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except:
+                    content = []
+            
+            if isinstance(content, list):
+                total_subtitles += len(content)
+        
+        # Calculate accurate progress
         completed_count = len(completed)
-        progress = round((completed_count / total_subtitles) * 100, 2) if total_subtitles > 0 else enrollment["progress"]
-
-        # ✅ Update stored progress (to keep it in sync)
+        progress = round((completed_count / total_subtitles) * 100, 2) if total_subtitles > 0 else 0.0
+        
+        # Update stored progress in user_courses
         run_query("""
             UPDATE user_courses 
             SET progress=%s 
             WHERE user_id=%s AND course_id=%s
         """, (progress, g.user_id, course_id), commit=True)
-
+        
         return jsonify({
             "progress": progress,
-            "completed_subtitles": completed or []
+            "completed_subtitles": completed or [],
+            "total_subtitles": total_subtitles,
+            "completed_count": completed_count
         }), 200
-
+        
     except Exception as e:
         current_app.logger.exception("Error fetching progress")
         return jsonify({"message": "Error fetching progress", "error": str(e)}), 500
-
 
 
 @app.route("/api/user/complete_subtitle", methods=["POST"])
