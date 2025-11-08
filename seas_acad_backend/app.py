@@ -830,7 +830,7 @@ def get_user_course_modules(course_id):
     if not enrolled:
         return jsonify({"message": "You are not enrolled in this course"}), 403
 
-    # Fetch course modules (same as public endpoint)
+    # Fetch course modules
     rows = run_query("""
         SELECT id AS module_id,
                module_number,
@@ -853,19 +853,36 @@ def get_user_course_modules(course_id):
                 return value
         return value
 
+    # Fetch all completed subtitles for this user and course
+    completed_subtitles = run_query("""
+        SELECT subtitle_id FROM subtitle_progress
+        WHERE user_id = %s AND course_id = %s
+    """, (user_id, course_id), fetchall=True)
+    
+    completed_ids = {row["subtitle_id"] for row in completed_subtitles}
+
     for row in rows:
+        module_id = row["module_id"]
+        
         # Decode module-level JSON fields
         row["content"] = try_json_load(row.get("content", []))
         row["video_url"] = try_json_load(row.get("video_url"))
         row["pdf_url"] = try_json_load(row.get("pdf_url"))
 
-        # Normalize deeply nested fields (like "data" in contents)
+        # Normalize deeply nested fields and assign subtitle IDs
         if isinstance(row["content"], list):
-            for sub in row["content"]:
-                if isinstance(sub, dict) and "contents" in sub:
-                    for item in sub["contents"]:
-                        if "data" in item:
-                            item["data"] = try_json_load(item["data"])
+            for subtitle_index, sub in enumerate(row["content"]):
+                if isinstance(sub, dict):
+                    # Generate deterministic subtitle_id: "module_id-subtitle_index"
+                    subtitle_id = f"{module_id}-{subtitle_index}"
+                    sub["subtitle_id"] = subtitle_id
+                    sub["is_completed"] = subtitle_id in completed_ids
+                    
+                    # Normalize contents data
+                    if "contents" in sub:
+                        for item in sub["contents"]:
+                            if "data" in item:
+                                item["data"] = try_json_load(item["data"])
 
     return jsonify(rows)
 
@@ -1082,109 +1099,95 @@ def mark_subtitle_complete():
     """Mark a subtitle as complete and update course progress"""
     data = request.get_json() or {}
     course_id = data.get("course_id")
-    subtitle_id = data.get("subtitle_id")
-
+    subtitle_id = data.get("subtitle_id")  # Now accepts "module_id-index" format
+    
     if not course_id or not subtitle_id:
         return jsonify({"message": "course_id and subtitle_id required"}), 400
-
+    
     try:
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
-
-        # ✅ Verify user enrollment
+        
+        # Check if user is enrolled
         cursor.execute("""
             SELECT id FROM user_courses 
             WHERE user_id=%s AND course_id=%s
         """, (g.user_id, course_id))
+        
         if not cursor.fetchone():
             cursor.close()
             conn.close()
             return jsonify({"message": "Not enrolled in this course"}), 403
-
-        # ✅ Ensure subtitle belongs to that course (security check)
-        cursor.execute("""
-            SELECT s.id 
-            FROM subtitles s
-            INNER JOIN modules m ON s.module_id = m.id
-            WHERE s.id=%s AND m.course_id=%s
-        """, (subtitle_id, course_id))
-        subtitle_exists = cursor.fetchone()
-        if not subtitle_exists:
-            cursor.close()
-            conn.close()
-            return jsonify({"message": "Invalid subtitle or not part of this course"}), 404
-
-        # ✅ Idempotent insert
+        
+        # Check if already completed (idempotent)
         cursor.execute("""
             SELECT id FROM subtitle_progress 
             WHERE user_id=%s AND course_id=%s AND subtitle_id=%s
         """, (g.user_id, course_id, subtitle_id))
+        
         already_completed = cursor.fetchone()
-
+        
         if not already_completed:
+            # Mark as complete
             cursor.execute("""
                 INSERT INTO subtitle_progress (user_id, course_id, subtitle_id, completed_at)
                 VALUES (%s, %s, %s, NOW())
             """, (g.user_id, course_id, subtitle_id))
-
-        # ✅ Count total subtitles (from DB)
+        
+        # Calculate total subtitles in course
         cursor.execute("""
-            SELECT COUNT(*) AS total 
-            FROM subtitles s
-            INNER JOIN modules m ON s.module_id = m.id
-            WHERE m.course_id = %s
+            SELECT content FROM modules WHERE course_id=%s
         """, (course_id,))
-        total_subtitles = cursor.fetchone()["total"]
-
-        # fallback: count legacy JSON subtitles if DB empty
-        if total_subtitles == 0:
-            cursor.execute("SELECT content FROM modules WHERE course_id=%s", (course_id,))
-            modules = cursor.fetchall()
-            for module in modules:
-                content = module.get("content")
-                if isinstance(content, str):
-                    try:
-                        content = json.loads(content)
-                    except:
-                        content = []
-                if isinstance(content, list):
-                    total_subtitles += len(content)
-
-        # ✅ Count completed subtitles
+        
+        modules = cursor.fetchall()
+        total_subtitles = 0
+        
+        for module in modules:
+            content = module.get("content")
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except:
+                    content = []
+            
+            if isinstance(content, list):
+                total_subtitles += len(content)
+        
+        # Count completed subtitles
         cursor.execute("""
-            SELECT COUNT(*) AS completed_count 
+            SELECT COUNT(*) as completed_count 
             FROM subtitle_progress 
             WHERE user_id=%s AND course_id=%s
         """, (g.user_id, course_id))
+        
         completed_count = cursor.fetchone()["completed_count"]
-
-        # ✅ Compute progress %
+        
+        # Calculate progress percentage
         progress = 0
         if total_subtitles > 0:
             progress = round((completed_count / total_subtitles) * 100, 2)
-
-        # ✅ Update user progress in user_courses
+        
+        # Update course progress
         cursor.execute("""
             UPDATE user_courses 
             SET progress=%s 
             WHERE user_id=%s AND course_id=%s
         """, (progress, g.user_id, course_id))
-
+        
         conn.commit()
         cursor.close()
         conn.close()
-
+        
         return jsonify({
             "message": "Subtitle marked as complete",
             "progress": progress,
             "completed_subtitles": completed_count,
             "total_subtitles": total_subtitles
         }), 200
-
+        
     except Exception as e:
         current_app.logger.exception("Error marking subtitle complete")
         return jsonify({"message": "Error marking subtitle complete", "error": str(e)}), 500
-
     
 @app.route("/api/courses_started", methods=["GET"])
 @login_required
