@@ -1301,7 +1301,27 @@ def change_password():
     )
     return jsonify({"message": "Password changed successfully"}), 200
 
+# -------------------------------
+# GET USER PROFILE PICTURE
+# -------------------------------
+@app.route("/api/profile/picture", methods=["GET"])
+@login_required
+def get_profile_picture():
+    """Fetch current user's profile picture URL"""
+    user = run_query(
+        "SELECT profile_pic FROM users WHERE id=%s",
+        (g.user_id,),
+        fetchone=True
+    )
+    
+    if not user:
+        return jsonify({"message": "User not found"}), 404
 
+    profile_pic_url = user["profile_pic"] if user["profile_pic"] else None
+
+    return jsonify({
+        "profile_pic": profile_pic_url
+    }), 200
 # -------------------------------
 # UPDATE PROFILE INFO (NAME, EMAIL, PROFILE PIC)
 # -------------------------------
