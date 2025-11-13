@@ -205,18 +205,21 @@ def register():
     except Exception as e:
         return jsonify({"message":"error creating user", "error": str(e)}), 500
 
+
+
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json() or {}
     username = data.get("username")
     password = data.get("password")
+    twofa_token = data.get("twofa_token")  # Optional 2FA code
 
     if not username or not password:
         return jsonify({"message": "username and password required"}), 400
 
-    # Fetch user info (with is_admin)
+    # Fetch user info (with is_admin and 2FA fields)
     user = run_query(
-        "SELECT id, username, password_hash, is_admin FROM users WHERE username=%s",
+        "SELECT id, username, password_hash, is_admin, twofa_enabled, twofa_secret FROM users WHERE username=%s",
         (username,),
         fetchone=True
     )
@@ -224,6 +227,21 @@ def login():
     # Invalid username or password
     if not user or not check_password_hash(user["password_hash"], password):
         return jsonify({"message": "invalid credentials"}), 401
+
+    # Check if 2FA is enabled
+    if user.get("twofa_enabled"):
+        if not twofa_token:
+            # Return special response indicating 2FA is required
+            return jsonify({
+                "requires_2fa": True,
+                "message": "2FA code required",
+                "user_id": user["id"]
+            }), 202  # 202 Accepted - pending 2FA
+        
+        # Verify 2FA token
+        totp = pyotp.TOTP(user["twofa_secret"])
+        if not totp.verify(twofa_token, valid_window=1):
+            return jsonify({"message": "Invalid 2FA code"}), 401
 
     # Default is_admin=False if missing
     is_admin = bool(user.get("is_admin", False))
@@ -1788,58 +1806,6 @@ def check_2fa_status():
         return jsonify({"message": "Error checking 2FA status", "error": str(e)}), 500
 
 
-# -------------------------------
-# MODIFIED LOGIN WITH 2FA CHECK
-# -------------------------------
-@app.route("/api/login", methods=["POST"])
-def login_with_2fa():
-    data = request.get_json() or {}
-    username = data.get("username")
-    password = data.get("password")
-    twofa_token = data.get("twofa_token")  # Optional 2FA code
-
-    if not username or not password:
-        return jsonify({"message": "username and password required"}), 400
-
-    # Fetch user info
-    user = run_query(
-        "SELECT id, username, password_hash, is_admin, twofa_enabled, twofa_secret FROM users WHERE username=%s",
-        (username,),
-        fetchone=True
-    )
-
-    # Invalid username or password
-    if not user or not check_password_hash(user["password_hash"], password):
-        return jsonify({"message": "invalid credentials"}), 401
-
-    # Check if 2FA is enabled
-    if user.get("twofa_enabled"):
-        if not twofa_token:
-            # Return special response indicating 2FA is required
-            return jsonify({
-                "requires_2fa": True,
-                "message": "2FA code required",
-                "user_id": user["id"]  # Temporary identifier
-            }), 202  # 202 Accepted - pending 2FA
-        
-        # Verify 2FA token
-        totp = pyotp.TOTP(user["twofa_secret"])
-        if not totp.verify(twofa_token, valid_window=1):
-            return jsonify({"message": "Invalid 2FA code"}), 401
-
-    # Default is_admin=False if missing
-    is_admin = bool(user.get("is_admin", False))
-
-    # Create JWT token
-    token = create_token(str(user["id"]), user["username"], is_admin=is_admin)
-
-    return jsonify({
-        "token": token,
-        "user_id": user["id"],
-        "username": user["username"],
-        "is_admin": is_admin,
-        "message": "Login successful"
-    })
 
 
 @app.route("/api/test-db", methods=["GET"])
