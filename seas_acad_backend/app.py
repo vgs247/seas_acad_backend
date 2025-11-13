@@ -13,7 +13,10 @@ from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
 from uuid import uuid4
 from flask import current_app
-
+import pyotp
+import qrcode
+import io
+import base64
 
 
 # --- Configuration ---
@@ -1301,6 +1304,8 @@ def change_password():
     )
     return jsonify({"message": "Password changed successfully"}), 200
 
+
+
 # -------------------------------
 # GET USER PROFILE PICTURE
 # -------------------------------
@@ -1322,6 +1327,8 @@ def get_profile_picture():
     return jsonify({
         "profile_pic": profile_pic_url
     }), 200
+    
+    
 # -------------------------------
 # UPDATE PROFILE INFO (NAME, EMAIL, PROFILE PIC)
 # -------------------------------
@@ -1599,6 +1606,240 @@ def paystack_webhook():
                 run_query("INSERT INTO user_courses (user_id, course_id, progress) VALUES (%s,%s,%s)", (user_id, course_id, 0), commit=True)
 
     return "", 200
+
+
+
+@app.route("/api/2fa/enable", methods=["POST"])
+@login_required
+def enable_2fa():
+    """Generate a new 2FA secret and return QR code"""
+    try:
+        # Generate a new secret for this user
+        secret = pyotp.random_base32()
+        
+        # Get user email for the provisioning URI
+        user = run_query(
+            "SELECT email, username FROM users WHERE id=%s",
+            (g.user_id,),
+            fetchone=True
+        )
+        
+        if not user:
+            return jsonify({"message": "User not found"}), 404
+        
+        # Store the secret temporarily (not enabled yet)
+        run_query(
+            "UPDATE users SET twofa_secret=%s, twofa_enabled=FALSE WHERE id=%s",
+            (secret, g.user_id),
+            commit=True
+        )
+        
+        # Generate provisioning URI for Google Authenticator
+        totp = pyotp.TOTP(secret)
+        uri = totp.provisioning_uri(
+            name=user["email"] or user["username"],
+            issuer_name="MyAcademy"
+        )
+        
+        # Generate QR code
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(uri)
+        qr.make(fit=True)
+        
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Convert to base64 for JSON response
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+        
+        return jsonify({
+            "message": "2FA QR code generated",
+            "qr_code": f"data:image/png;base64,{img_base64}",
+            "secret": secret,  # Also send secret for manual entry
+            "manual_entry_key": secret
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.exception("Error enabling 2FA")
+        return jsonify({"message": "Error enabling 2FA", "error": str(e)}), 500
+
+
+# -------------------------------
+# VERIFY 2FA - Confirm Setup
+# -------------------------------
+@app.route("/api/2fa/verify", methods=["POST"])
+@login_required
+def verify_2fa_setup():
+    """Verify the 6-digit code and enable 2FA"""
+    data = request.get_json() or {}
+    token = data.get("token")
+    
+    if not token or len(token) != 6:
+        return jsonify({"message": "Invalid 6-digit code"}), 400
+    
+    try:
+        # Get user's secret
+        user = run_query(
+            "SELECT twofa_secret FROM users WHERE id=%s",
+            (g.user_id,),
+            fetchone=True
+        )
+        
+        if not user or not user["twofa_secret"]:
+            return jsonify({"message": "2FA not initialized"}), 400
+        
+        # Verify the token
+        totp = pyotp.TOTP(user["twofa_secret"])
+        
+        if totp.verify(token, valid_window=1):  # Allow 1 time step tolerance
+            # Enable 2FA for this user
+            run_query(
+                "UPDATE users SET twofa_enabled=TRUE WHERE id=%s",
+                (g.user_id,),
+                commit=True
+            )
+            
+            return jsonify({
+                "success": True,
+                "message": "2FA enabled successfully"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Invalid code. Please try again."
+            }), 400
+            
+    except Exception as e:
+        current_app.logger.exception("Error verifying 2FA")
+        return jsonify({"message": "Error verifying 2FA", "error": str(e)}), 500
+
+
+# -------------------------------
+# DISABLE 2FA
+# -------------------------------
+@app.route("/api/2fa/disable", methods=["POST"])
+@login_required
+def disable_2fa():
+    """Disable 2FA for the current user"""
+    data = request.get_json() or {}
+    password = data.get("password")  # Require password for security
+    
+    if not password:
+        return jsonify({"message": "Password required to disable 2FA"}), 400
+    
+    try:
+        # Verify password
+        user = run_query(
+            "SELECT password_hash FROM users WHERE id=%s",
+            (g.user_id,),
+            fetchone=True
+        )
+        
+        if not user or not check_password_hash(user["password_hash"], password):
+            return jsonify({"message": "Incorrect password"}), 401
+        
+        # Disable 2FA and clear secret
+        run_query(
+            "UPDATE users SET twofa_enabled=FALSE, twofa_secret=NULL WHERE id=%s",
+            (g.user_id,),
+            commit=True
+        )
+        
+        return jsonify({
+            "success": True,
+            "message": "2FA disabled successfully"
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.exception("Error disabling 2FA")
+        return jsonify({"message": "Error disabling 2FA", "error": str(e)}), 500
+
+
+# -------------------------------
+# CHECK 2FA STATUS
+# -------------------------------
+@app.route("/api/2fa/status", methods=["GET"])
+@login_required
+def check_2fa_status():
+    """Check if 2FA is enabled for the current user"""
+    try:
+        user = run_query(
+            "SELECT twofa_enabled FROM users WHERE id=%s",
+            (g.user_id,),
+            fetchone=True
+        )
+        
+        if not user:
+            return jsonify({"message": "User not found"}), 404
+        
+        return jsonify({
+            "twofa_enabled": bool(user.get("twofa_enabled"))
+        }), 200
+        
+    except Exception as e:
+        current_app.logger.exception("Error checking 2FA status")
+        return jsonify({"message": "Error checking 2FA status", "error": str(e)}), 500
+
+
+# -------------------------------
+# MODIFIED LOGIN WITH 2FA CHECK
+# -------------------------------
+@app.route("/api/login", methods=["POST"])
+def login_with_2fa():
+    data = request.get_json() or {}
+    username = data.get("username")
+    password = data.get("password")
+    twofa_token = data.get("twofa_token")  # Optional 2FA code
+
+    if not username or not password:
+        return jsonify({"message": "username and password required"}), 400
+
+    # Fetch user info
+    user = run_query(
+        "SELECT id, username, password_hash, is_admin, twofa_enabled, twofa_secret FROM users WHERE username=%s",
+        (username,),
+        fetchone=True
+    )
+
+    # Invalid username or password
+    if not user or not check_password_hash(user["password_hash"], password):
+        return jsonify({"message": "invalid credentials"}), 401
+
+    # Check if 2FA is enabled
+    if user.get("twofa_enabled"):
+        if not twofa_token:
+            # Return special response indicating 2FA is required
+            return jsonify({
+                "requires_2fa": True,
+                "message": "2FA code required",
+                "user_id": user["id"]  # Temporary identifier
+            }), 202  # 202 Accepted - pending 2FA
+        
+        # Verify 2FA token
+        totp = pyotp.TOTP(user["twofa_secret"])
+        if not totp.verify(twofa_token, valid_window=1):
+            return jsonify({"message": "Invalid 2FA code"}), 401
+
+    # Default is_admin=False if missing
+    is_admin = bool(user.get("is_admin", False))
+
+    # Create JWT token
+    token = create_token(str(user["id"]), user["username"], is_admin=is_admin)
+
+    return jsonify({
+        "token": token,
+        "user_id": user["id"],
+        "username": user["username"],
+        "is_admin": is_admin,
+        "message": "Login successful"
+    })
 
 
 @app.route("/api/test-db", methods=["GET"])

@@ -7,3 +7,5 @@ werkzeug
 cryptography
 requests
 python-dotenv
+pyotp
+qrcode[pil]
