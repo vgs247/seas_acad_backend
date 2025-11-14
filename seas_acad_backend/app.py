@@ -287,7 +287,7 @@ def list_courses():
         """)
         courses = cursor.fetchall()
 
-        # Fetch module counts for all courses in one query
+        # Fetch module counts
         cursor.execute("""
             SELECT course_id, COUNT(*) AS cnt 
             FROM modules 
@@ -295,27 +295,31 @@ def list_courses():
         """)
         counts = {row["course_id"]: row["cnt"] for row in cursor.fetchall()}
 
-        # Process each course
+        # Process each course - ENSURE BOOLEAN CONVERSION
         for c in courses:
             c["num_lessons"] = counts.get(c["course_id"], 0)
-            # Convert boolean fields explicitly
-            c["is_published"] = bool(c.get("is_published"))
-            c["continuous_assessment_enabled"] = bool(c.get("continuous_assessment_enabled"))
-            # Ensure percentage fields are integers
+            
+            # CRITICAL: Convert MySQL TINYINT(1) to Python bool explicitly
+            c["is_published"] = bool(c.get("is_published", 0))
+            c["continuous_assessment_enabled"] = bool(c.get("continuous_assessment_enabled", 0))
+            
+            # Ensure integers
             c["ca_percentage"] = int(c.get("ca_percentage") or 60)
             c["exam_percentage"] = int(c.get("exam_percentage") or 40)
 
         cursor.close()
         conn.close()
 
-        print(f"Returning {len(courses)} courses")
+        # DEBUG LOG
         if courses:
-            print(f"Sample course CA data: {courses[0].get('continuous_assessment_enabled')}, {courses[0].get('ca_percentage')}")
+            print(f"Sample course data: CA={courses[0]['continuous_assessment_enabled']} (type: {type(courses[0]['continuous_assessment_enabled'])})")
 
         return jsonify(courses), 200
 
     except Exception as e:
         print(f"Error in /api/courses: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
     
     
