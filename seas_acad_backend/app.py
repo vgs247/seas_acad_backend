@@ -1874,10 +1874,12 @@ def toggle_continuous_assessment(course_id):
         return jsonify({"message": "Error updating settings", "error": str(e)}), 500
 
 
+# Add/Update this route in app.py
+
 @app.route("/api/user/quiz_score", methods=["POST"])
 @login_required
 def submit_quiz_score():
-    """Submit a quiz score for a user"""
+    """Submit a quiz score for a user - handles both CA quizzes and final exam"""
     data = request.get_json() or {}
     course_id = data.get("course_id")
     quiz_id = data.get("quiz_id")
@@ -1885,6 +1887,7 @@ def submit_quiz_score():
     subtitle_id = data.get("subtitle_id")
     score = data.get("score")
     max_score = data.get("max_score")
+    is_final_exam = data.get("is_final_exam", False)  # ← ADD THIS
 
     if not all([course_id, quiz_id, module_id, subtitle_id, score is not None, max_score]):
         return jsonify({"message": "Missing required fields"}), 400
@@ -1892,36 +1895,139 @@ def submit_quiz_score():
     try:
         percentage = (score / max_score) * 100 if max_score > 0 else 0
 
-        # Insert or update quiz score (upsert)
-        conn = get_db_connection()
-        cursor = conn.cursor(pymysql.cursors.DictCursor)
+        # ← CHECK IF THIS IS A FINAL EXAM
+        if is_final_exam:
+            # Submit as final exam score
+            conn = get_db_connection()
+            cursor = conn.cursor(pymysql.cursors.DictCursor)
 
-        cursor.execute("""
-            INSERT INTO quiz_scores 
-            (user_id, course_id, quiz_id, module_id, subtitle_id, score, max_score, percentage)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE 
-            score=%s, max_score=%s, percentage=%s, completed_at=CURRENT_TIMESTAMP
-        """, (g.user_id, course_id, quiz_id, module_id, subtitle_id, score, max_score, percentage,
-              score, max_score, percentage))
+            cursor.execute("""
+                INSERT INTO final_exam_scores 
+                (user_id, course_id, score, max_score, percentage)
+                VALUES (%s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE 
+                score=%s, max_score=%s, percentage=%s, completed_at=CURRENT_TIMESTAMP
+            """, (g.user_id, course_id, score, max_score, percentage,
+                  score, max_score, percentage))
 
-        conn.commit()
-        cursor.close()
-        conn.close()
+            conn.commit()
+            cursor.close()
+            conn.close()
 
-        # Recalculate CA score
-        _update_ca_score(g.user_id, course_id)
+            # Recalculate final grade (includes both CA and exam)
+            _update_final_grade(g.user_id, course_id)
 
-        return jsonify({
-            "message": "Quiz score submitted successfully",
-            "score": score,
-            "max_score": max_score,
-            "percentage": percentage
-        }), 200
+            return jsonify({
+                "message": "Final exam score submitted successfully",
+                "score": score,
+                "max_score": max_score,
+                "percentage": percentage,
+                "is_final_exam": True
+            }), 200
+
+        else:
+            # Submit as regular quiz (CA) score
+            conn = get_db_connection()
+            cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+            cursor.execute("""
+                INSERT INTO quiz_scores 
+                (user_id, course_id, quiz_id, module_id, subtitle_id, score, max_score, percentage)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE 
+                score=%s, max_score=%s, percentage=%s, completed_at=CURRENT_TIMESTAMP
+            """, (g.user_id, course_id, quiz_id, module_id, subtitle_id, score, max_score, percentage,
+                  score, max_score, percentage))
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            # Recalculate CA score (average of all quizzes)
+            _update_ca_score(g.user_id, course_id)
+
+            return jsonify({
+                "message": "Quiz score submitted successfully",
+                "score": score,
+                "max_score": max_score,
+                "percentage": percentage,
+                "is_final_exam": False
+            }), 200
 
     except Exception as e:
         current_app.logger.exception("Error submitting quiz score")
         return jsonify({"message": "Error submitting quiz score", "error": str(e)}), 500
+
+
+# Update the _update_final_grade function to ensure it uses the latest data
+def _update_final_grade(user_id, course_id):
+    """Calculate final grade based on CA and exam scores"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # Get course settings
+        cursor.execute("""
+            SELECT continuous_assessment_enabled, ca_percentage, exam_percentage
+            FROM courses WHERE id=%s
+        """, (course_id,))
+        course = cursor.fetchone()
+
+        if not course:
+            cursor.close()
+            conn.close()
+            return
+
+        ca_enabled = course["continuous_assessment_enabled"]
+        ca_weight = course["ca_percentage"] / 100 if ca_enabled else 0
+        exam_weight = course["exam_percentage"] / 100 if ca_enabled else 1
+
+        # Get CA score (average of all non-final-exam quizzes)
+        cursor.execute("""
+            SELECT AVG(percentage) as avg_score
+            FROM quiz_scores
+            WHERE user_id=%s AND course_id=%s
+        """, (user_id, course_id))
+        ca_result = cursor.fetchone()
+        ca_score = ca_result["avg_score"] if ca_result and ca_result["avg_score"] else 0
+
+        # Get exam score (from final_exam_scores table)
+        cursor.execute("""
+            SELECT percentage FROM final_exam_scores
+            WHERE user_id=%s AND course_id=%s
+        """, (user_id, course_id))
+        exam_result = cursor.fetchone()
+        exam_score = exam_result["percentage"] if exam_result else 0
+
+        # Calculate final score
+        if ca_enabled:
+            final_score = (ca_score * ca_weight) + (exam_score * exam_weight)
+        else:
+            final_score = exam_score
+
+        # Determine grade
+        grade = _calculate_grade(final_score)
+        passed = final_score >= 50  # Pass mark is 50%
+
+        cursor.close()
+        conn.close()
+
+        # Update course grade
+        _upsert_course_grade(
+            user_id, 
+            course_id, 
+            ca_score=ca_score if ca_enabled else 0,
+            exam_score=exam_score,
+            final_score=final_score,
+            grade=grade,
+            passed=passed
+        )
+
+        print(f"✅ Final grade updated for user {user_id}, course {course_id}: {final_score}% (Grade: {grade})")
+
+    except Exception as e:
+        current_app.logger.exception("Error updating final grade")
+        print(f"❌ Error updating final grade: {e}")
 
 
 @app.route("/api/user/final_exam_score", methods=["POST"])
