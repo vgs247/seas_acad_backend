@@ -1016,9 +1016,9 @@ def enroll():
     if not course_id:
         return jsonify({"message": "course_id required"}), 400
 
-    #Check if the course exists and whether it's free
+    # Check if the course exists and whether it's free
     course = run_query(
-        "SELECT id, price FROM courses WHERE id=%s", 
+        "SELECT id, amount, is_free FROM courses WHERE id=%s", 
         (course_id,), 
         fetchone=True
     )
@@ -1026,23 +1026,27 @@ def enroll():
     if not course:
         return jsonify({"message": "Course not found"}), 404
 
-    #If course is paid, block direct enrollment
-    if course["price"] and float(course["price"]) > 0:
+    # ✅ Check is_free flag (more reliable than amount)
+    is_free = course.get("is_free", False)
+    
+    # If course is NOT free, block direct enrollment
+    if not is_free:
         return jsonify({
             "message": "This course requires payment before enrollment",
             "requires_payment": True
         }), 403
 
-    #Check if already enrolled
+    # Check if already enrolled
     existing = run_query(
         "SELECT id FROM user_courses WHERE user_id=%s AND course_id=%s", 
         (g.user_id, course_id), 
         fetchone=True
     )
+    
     if existing:
         return jsonify({"message": "Already enrolled"}), 200
 
-    #Enroll the user (for free course)
+    # Enroll the user (for free course)
     run_query(
         "INSERT INTO user_courses (user_id, course_id, progress) VALUES (%s, %s, %s)",
         (g.user_id, course_id, 0),
