@@ -2126,6 +2126,54 @@ def _calculate_grade(score):
         return "F"
 
 
+
+
+@app.route("/api/user/all_grades", methods=["GET"])
+@login_required
+def get_all_user_grades():
+    """Get all grades for all enrolled courses for the current user"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # Get all enrolled courses with their grades
+        cursor.execute("""
+            SELECT 
+                c.id AS course_id,
+                c.title AS course_title,
+                c.continuous_assessment_enabled,
+                c.ca_percentage,
+                c.exam_percentage,
+                cg.ca_score,
+                cg.exam_score,
+                cg.final_score,
+                cg.grade,
+                cg.passed,
+                cg.completed_at
+            FROM user_courses uc
+            JOIN courses c ON uc.course_id = c.id
+            LEFT JOIN course_grades cg ON cg.user_id = uc.user_id AND cg.course_id = c.id
+            WHERE uc.user_id = %s
+            ORDER BY c.title ASC
+        """, (g.user_id,))
+        
+        grades = cursor.fetchall()
+        
+        # Convert boolean fields
+        for grade in grades:
+            grade['continuous_assessment_enabled'] = bool(grade.get('continuous_assessment_enabled'))
+            grade['passed'] = bool(grade.get('passed')) if grade.get('passed') is not None else None
+        
+        cursor.close()
+        conn.close()
+
+        return jsonify(grades), 200
+
+    except Exception as e:
+        current_app.logger.exception("Error fetching all grades")
+        return jsonify({"message": "Error fetching grades", "error": str(e)}), 500
+
+
 @app.route("/api/user/course_grade/<int:course_id>", methods=["GET"])
 @login_required
 def get_course_grade(course_id):
