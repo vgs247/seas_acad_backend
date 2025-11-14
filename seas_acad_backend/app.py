@@ -1843,16 +1843,11 @@ def toggle_continuous_assessment(course_id):
     ca_percentage = data.get("ca_percentage", 60)
     exam_percentage = data.get("exam_percentage", 40)
 
-    print(f"🔧 Toggle CA for Course {course_id}:")
-    print(f"  Enabled: {enabled}")
-    print(f"  CA %: {ca_percentage}, Exam %: {exam_percentage}")
-
     if enabled is None:
         return jsonify({"message": "Missing 'enabled' (true/false)"}), 400
 
-    # Validate percentages
-    if ca_percentage + exam_percentage != 100:
-        return jsonify({"message": f"CA and Exam percentages must add up to 100 (got {ca_percentage} + {exam_percentage} = {ca_percentage + exam_percentage})"}), 400
+    print(f"🔧 Toggle CA Request for Course {course_id}:")
+    print(f"  Input - Enabled: {enabled}, CA%: {ca_percentage}, Exam%: {exam_percentage}")
 
     try:
         # Check if course exists
@@ -1864,9 +1859,26 @@ def toggle_continuous_assessment(course_id):
         if not course:
             return jsonify({"message": "Course not found"}), 404
 
-        print(f"📋 Current state: CA={course['continuous_assessment_enabled']}, CA%={course['ca_percentage']}, Exam%={course['exam_percentage']}")
+        print(f"📋 Current DB state: CA={course['continuous_assessment_enabled']}, CA%={course['ca_percentage']}, Exam%={course['exam_percentage']}")
 
-        # FORCE UPDATE with explicit values
+        # ✅ SMART LOGIC: Auto-adjust percentages based on enabled state
+        if enabled:
+            # ENABLING CA: Use user-provided split (must add to 100)
+            if ca_percentage + exam_percentage != 100:
+                return jsonify({
+                    "message": f"CA and Exam percentages must add up to 100 (got {ca_percentage} + {exam_percentage} = {ca_percentage + exam_percentage})"
+                }), 400
+            
+            final_ca_percentage = ca_percentage
+            final_exam_percentage = exam_percentage
+        else:
+            # DISABLING CA: Force exam to 100%, CA to 0%
+            final_ca_percentage = 0
+            final_exam_percentage = 100
+
+        print(f"📝 Final values to save: CA={enabled}, CA%={final_ca_percentage}, Exam%={final_exam_percentage}")
+
+        # Update database with explicit transaction
         conn = get_db_connection()
         cursor = conn.cursor()
         
@@ -1876,30 +1888,34 @@ def toggle_continuous_assessment(course_id):
                 ca_percentage = %s,
                 exam_percentage = %s
             WHERE id = %s
-        """, (1 if enabled else 0, int(ca_percentage), int(exam_percentage), course_id))
+        """, (1 if enabled else 0, int(final_ca_percentage), int(final_exam_percentage), course_id))
         
         conn.commit()
         rows_affected = cursor.rowcount
         cursor.close()
         conn.close()
 
-        print(f"✅ Update complete. Rows affected: {rows_affected}")
+        print(f"✅ Updated {rows_affected} row(s)")
 
-        # VERIFY the update worked
+        # Verify the update
         verify = run_query(
             "SELECT continuous_assessment_enabled, ca_percentage, exam_percentage FROM courses WHERE id=%s",
             (course_id,),
             fetchone=True
         )
-        print(f"🔍 Verified state: CA={verify['continuous_assessment_enabled']}, CA%={verify['ca_percentage']}, Exam%={verify['exam_percentage']}")
+        print(f"🔍 Verified DB state: CA={verify['continuous_assessment_enabled']}, CA%={verify['ca_percentage']}, Exam%={verify['exam_percentage']}")
 
         status = "enabled" if enabled else "disabled"
+        message = f"Continuous Assessment {status} successfully"
+        
+        if not enabled:
+            message += " (Exam now counts 100%)"
+
         return jsonify({
-            "message": f"Continuous Assessment {status} successfully",
+            "message": message,
             "continuous_assessment_enabled": bool(enabled),
-            "ca_percentage": int(ca_percentage),
-            "exam_percentage": int(exam_percentage),
-            "verified": verify  # Include verification in response
+            "ca_percentage": int(final_ca_percentage),
+            "exam_percentage": int(final_exam_percentage)
         }), 200
 
     except Exception as e:
@@ -1908,7 +1924,6 @@ def toggle_continuous_assessment(course_id):
         import traceback
         traceback.print_exc()
         return jsonify({"message": "Error updating settings", "error": str(e)}), 500
-
 
 # Add/Update this route in app.py
 
