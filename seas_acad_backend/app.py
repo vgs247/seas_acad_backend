@@ -1808,6 +1808,389 @@ def check_2fa_status():
 
 
 
+# Add these routes to your app.py file
+
+# ========================================
+# CONTINUOUS ASSESSMENT ROUTES
+# ========================================
+
+@app.route("/api/courses/<int:course_id>/continuous_assessment", methods=["PATCH"])
+@login_required
+def toggle_continuous_assessment(course_id):
+    """Admin-only: Enable/disable continuous assessment for a course"""
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+
+    data = request.get_json() or {}
+    enabled = data.get("enabled")
+    ca_percentage = data.get("ca_percentage", 60)
+    exam_percentage = data.get("exam_percentage", 40)
+
+    if enabled is None:
+        return jsonify({"message": "Missing 'enabled' (true/false)"}), 400
+
+    # Validate percentages
+    if ca_percentage + exam_percentage != 100:
+        return jsonify({"message": "CA and Exam percentages must add up to 100"}), 400
+
+    try:
+        # Check if course exists
+        course = run_query("SELECT id, title FROM courses WHERE id=%s", (course_id,), fetchone=True)
+        if not course:
+            return jsonify({"message": "Course not found"}), 404
+
+        # Update continuous assessment settings
+        run_query(
+            """UPDATE courses 
+               SET continuous_assessment_enabled=%s, ca_percentage=%s, exam_percentage=%s 
+               WHERE id=%s""",
+            (bool(enabled), ca_percentage, exam_percentage, course_id),
+            commit=True
+        )
+
+        status = "enabled" if enabled else "disabled"
+        return jsonify({
+            "message": f"Continuous Assessment {status} successfully",
+            "continuous_assessment_enabled": enabled,
+            "ca_percentage": ca_percentage,
+            "exam_percentage": exam_percentage
+        }), 200
+
+    except Exception as e:
+        current_app.logger.exception("Error toggling continuous assessment")
+        return jsonify({"message": "Error updating settings", "error": str(e)}), 500
+
+
+@app.route("/api/user/quiz_score", methods=["POST"])
+@login_required
+def submit_quiz_score():
+    """Submit a quiz score for a user"""
+    data = request.get_json() or {}
+    course_id = data.get("course_id")
+    quiz_id = data.get("quiz_id")
+    module_id = data.get("module_id")
+    subtitle_id = data.get("subtitle_id")
+    score = data.get("score")
+    max_score = data.get("max_score")
+
+    if not all([course_id, quiz_id, module_id, subtitle_id, score is not None, max_score]):
+        return jsonify({"message": "Missing required fields"}), 400
+
+    try:
+        percentage = (score / max_score) * 100 if max_score > 0 else 0
+
+        # Insert or update quiz score (upsert)
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        cursor.execute("""
+            INSERT INTO quiz_scores 
+            (user_id, course_id, quiz_id, module_id, subtitle_id, score, max_score, percentage)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE 
+            score=%s, max_score=%s, percentage=%s, completed_at=CURRENT_TIMESTAMP
+        """, (g.user_id, course_id, quiz_id, module_id, subtitle_id, score, max_score, percentage,
+              score, max_score, percentage))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        # Recalculate CA score
+        _update_ca_score(g.user_id, course_id)
+
+        return jsonify({
+            "message": "Quiz score submitted successfully",
+            "score": score,
+            "max_score": max_score,
+            "percentage": percentage
+        }), 200
+
+    except Exception as e:
+        current_app.logger.exception("Error submitting quiz score")
+        return jsonify({"message": "Error submitting quiz score", "error": str(e)}), 500
+
+
+@app.route("/api/user/final_exam_score", methods=["POST"])
+@login_required
+def submit_final_exam_score():
+    """Submit final exam score for a user"""
+    data = request.get_json() or {}
+    course_id = data.get("course_id")
+    score = data.get("score")
+    max_score = data.get("max_score")
+
+    if not all([course_id, score is not None, max_score]):
+        return jsonify({"message": "Missing required fields"}), 400
+
+    try:
+        percentage = (score / max_score) * 100 if max_score > 0 else 0
+
+        # Insert or update final exam score
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        cursor.execute("""
+            INSERT INTO final_exam_scores 
+            (user_id, course_id, score, max_score, percentage)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE 
+            score=%s, max_score=%s, percentage=%s, completed_at=CURRENT_TIMESTAMP
+        """, (g.user_id, course_id, score, max_score, percentage,
+              score, max_score, percentage))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        # Recalculate final grade
+        _update_final_grade(g.user_id, course_id)
+
+        return jsonify({
+            "message": "Final exam score submitted successfully",
+            "score": score,
+            "max_score": max_score,
+            "percentage": percentage
+        }), 200
+
+    except Exception as e:
+        current_app.logger.exception("Error submitting final exam score")
+        return jsonify({"message": "Error submitting final exam score", "error": str(e)}), 500
+
+
+def _update_ca_score(user_id, course_id):
+    """Calculate and update CA score from all quiz scores"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # Calculate average quiz score
+        cursor.execute("""
+            SELECT AVG(percentage) as avg_score
+            FROM quiz_scores
+            WHERE user_id=%s AND course_id=%s
+        """, (user_id, course_id))
+
+        result = cursor.fetchone()
+        ca_score = result["avg_score"] if result and result["avg_score"] else 0
+
+        cursor.close()
+        conn.close()
+
+        # Update or insert into course_grades
+        _upsert_course_grade(user_id, course_id, ca_score=ca_score)
+
+    except Exception as e:
+        current_app.logger.exception("Error updating CA score")
+
+
+def _update_final_grade(user_id, course_id):
+    """Calculate final grade based on CA and exam scores"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # Get course settings
+        cursor.execute("""
+            SELECT continuous_assessment_enabled, ca_percentage, exam_percentage
+            FROM courses WHERE id=%s
+        """, (course_id,))
+        course = cursor.fetchone()
+
+        if not course:
+            cursor.close()
+            conn.close()
+            return
+
+        ca_enabled = course["continuous_assessment_enabled"]
+        ca_weight = course["ca_percentage"] / 100 if ca_enabled else 0
+        exam_weight = course["exam_percentage"] / 100 if ca_enabled else 1
+
+        # Get CA score
+        cursor.execute("""
+            SELECT AVG(percentage) as avg_score
+            FROM quiz_scores
+            WHERE user_id=%s AND course_id=%s
+        """, (user_id, course_id))
+        ca_result = cursor.fetchone()
+        ca_score = ca_result["avg_score"] if ca_result and ca_result["avg_score"] else 0
+
+        # Get exam score
+        cursor.execute("""
+            SELECT percentage FROM final_exam_scores
+            WHERE user_id=%s AND course_id=%s
+        """, (user_id, course_id))
+        exam_result = cursor.fetchone()
+        exam_score = exam_result["percentage"] if exam_result else 0
+
+        # Calculate final score
+        if ca_enabled:
+            final_score = (ca_score * ca_weight) + (exam_score * exam_weight)
+        else:
+            final_score = exam_score
+
+        # Determine grade
+        grade = _calculate_grade(final_score)
+        passed = final_score >= 50  # Pass mark is 50%
+
+        cursor.close()
+        conn.close()
+
+        # Update course grade
+        _upsert_course_grade(
+            user_id, 
+            course_id, 
+            ca_score=ca_score if ca_enabled else 0,
+            exam_score=exam_score,
+            final_score=final_score,
+            grade=grade,
+            passed=passed
+        )
+
+    except Exception as e:
+        current_app.logger.exception("Error updating final grade")
+
+
+def _upsert_course_grade(user_id, course_id, ca_score=None, exam_score=None, 
+                         final_score=None, grade=None, passed=None):
+    """Insert or update course grade"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # Build update fields dynamically
+        fields = []
+        values = []
+
+        if ca_score is not None:
+            fields.append("ca_score=%s")
+            values.append(ca_score)
+        if exam_score is not None:
+            fields.append("exam_score=%s")
+            values.append(exam_score)
+        if final_score is not None:
+            fields.append("final_score=%s")
+            values.append(final_score)
+        if grade is not None:
+            fields.append("grade=%s")
+            values.append(grade)
+        if passed is not None:
+            fields.append("passed=%s")
+            values.append(passed)
+
+        if not fields:
+            cursor.close()
+            conn.close()
+            return
+
+        # Insert or update
+        cursor.execute(f"""
+            INSERT INTO course_grades 
+            (user_id, course_id, ca_score, exam_score, final_score, grade, passed)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE {', '.join(fields)}
+        """, (user_id, course_id, ca_score or 0, exam_score or 0, final_score or 0, 
+              grade or 'F', passed or False, *values))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+    except Exception as e:
+        current_app.logger.exception("Error upserting course grade")
+
+
+def _calculate_grade(score):
+    """Calculate letter grade from percentage score"""
+    if score >= 90:
+        return "A+"
+    elif score >= 85:
+        return "A"
+    elif score >= 80:
+        return "A-"
+    elif score >= 75:
+        return "B+"
+    elif score >= 70:
+        return "B"
+    elif score >= 65:
+        return "B-"
+    elif score >= 60:
+        return "C+"
+    elif score >= 55:
+        return "C"
+    elif score >= 50:
+        return "C-"
+    elif score >= 45:
+        return "D"
+    else:
+        return "F"
+
+
+@app.route("/api/user/course_grade/<int:course_id>", methods=["GET"])
+@login_required
+def get_course_grade(course_id):
+    """Get user's grade for a specific course"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # Get course settings
+        cursor.execute("""
+            SELECT continuous_assessment_enabled, ca_percentage, exam_percentage, title
+            FROM courses WHERE id=%s
+        """, (course_id,))
+        course = cursor.fetchone()
+
+        if not course:
+            cursor.close()
+            conn.close()
+            return jsonify({"message": "Course not found"}), 404
+
+        # Get grade data
+        cursor.execute("""
+            SELECT ca_score, exam_score, final_score, grade, passed, completed_at
+            FROM course_grades
+            WHERE user_id=%s AND course_id=%s
+        """, (g.user_id, course_id))
+        grade_data = cursor.fetchone()
+
+        # Get quiz scores
+        cursor.execute("""
+            SELECT quiz_id, score, max_score, percentage, completed_at
+            FROM quiz_scores
+            WHERE user_id=%s AND course_id=%s
+            ORDER BY completed_at DESC
+        """, (g.user_id, course_id))
+        quiz_scores = cursor.fetchall()
+
+        # Get exam score
+        cursor.execute("""
+            SELECT score, max_score, percentage, completed_at
+            FROM final_exam_scores
+            WHERE user_id=%s AND course_id=%s
+        """, (g.user_id, course_id))
+        exam_score = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        return jsonify({
+            "course_id": course_id,
+            "course_title": course["title"],
+            "continuous_assessment_enabled": bool(course["continuous_assessment_enabled"]),
+            "ca_percentage": course["ca_percentage"],
+            "exam_percentage": course["exam_percentage"],
+            "grade_data": grade_data,
+            "quiz_scores": quiz_scores or [],
+            "exam_score": exam_score
+        }), 200
+
+    except Exception as e:
+        current_app.logger.exception("Error fetching course grade")
+        return jsonify({"message": "Error fetching grade", "error": str(e)}), 500
+    
+    
+
 @app.route("/api/test-db", methods=["GET"])
 def test_db_connection():
     try:
