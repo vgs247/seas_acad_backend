@@ -267,7 +267,7 @@ def list_courses():
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
 
-        # Fetch courses including CA fields
+        # Fetch courses including is_free
         cursor.execute("""
             SELECT 
                 id AS course_id, 
@@ -276,6 +276,7 @@ def list_courses():
                 duration, 
                 total_modules, 
                 amount, 
+                is_free,
                 category, 
                 course_image,
                 is_published,
@@ -295,24 +296,17 @@ def list_courses():
         """)
         counts = {row["course_id"]: row["cnt"] for row in cursor.fetchall()}
 
-        # Process each course - ENSURE BOOLEAN CONVERSION
+        # Process each course
         for c in courses:
             c["num_lessons"] = counts.get(c["course_id"], 0)
-            
-            # CRITICAL: Convert MySQL TINYINT(1) to Python bool explicitly
             c["is_published"] = bool(c.get("is_published", 0))
             c["continuous_assessment_enabled"] = bool(c.get("continuous_assessment_enabled", 0))
-            
-            # Ensure integers
+            c["is_free"] = bool(c.get("is_free", 0))  # ← NEW
             c["ca_percentage"] = int(c.get("ca_percentage") or 60)
             c["exam_percentage"] = int(c.get("exam_percentage") or 40)
 
         cursor.close()
         conn.close()
-
-        # DEBUG LOG
-        if courses:
-            print(f"Sample course data: CA={courses[0]['continuous_assessment_enabled']} (type: {type(courses[0]['continuous_assessment_enabled'])})")
 
         return jsonify(courses), 200
 
@@ -478,6 +472,8 @@ def upload_file_to_bluehost(local_path, remote_filename):
     base_url = os.getenv("BASE_FILE_URL")  # e.g. https://seasecurity.tech/uploads/profile_pics/
     return f"{base_url.rstrip('/')}/{remote_filename}"
 
+
+
 @app.route("/api/courses", methods=["POST"])
 @login_required
 def add_course():
@@ -493,22 +489,38 @@ def add_course():
         total_modules = request.form.get("total_modules")
         amount = request.form.get("amount")
         category = request.form.get("category")
+        is_free = request.form.get("is_free")  # ← NEW: "true" or "false"
         file = request.files.get("file")
 
         # Validate required fields
-        if not all([title, description, duration, total_modules, amount, category]):
-            return jsonify({"message": "All fields are required"}), 400
+        if not all([title, description, duration, total_modules, category]):
+            return jsonify({"message": "All required fields must be filled"}), 400
+
+        # ✅ Handle free course logic
+        if is_free == "true":
+            final_amount = 0
+            final_is_free = True
+        else:
+            try:
+                final_amount = float(amount) if amount else 0
+                if final_amount <= 0:
+                    return jsonify({"message": "Paid courses must have amount > 0"}), 400
+                final_is_free = False
+            except ValueError:
+                return jsonify({"message": "Invalid amount format"}), 400
+
+        print(f"📝 Creating course: is_free={final_is_free}, amount={final_amount}")
 
         # --- SINGLE CONNECTION TO AVOID DUPLICATES ---
         conn = get_db_connection()
         try:
             with conn.cursor() as cur:
-                # Insert course
+                # Insert course with is_free flag
                 cur.execute("""
-                    INSERT INTO courses (title, description, duration, total_modules, amount, category)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                """, (title, description, duration, total_modules, amount, category))
-                course_id = cur.lastrowid  #correct course ID from same connection
+                    INSERT INTO courses (title, description, duration, total_modules, amount, is_free, category)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (title, description, duration, total_modules, final_amount, final_is_free, category))
+                course_id = cur.lastrowid
 
             conn.commit()
         finally:
@@ -543,7 +555,9 @@ def add_course():
         return jsonify({
             "message": "Course created successfully",
             "course_id": course_id,
-            "course_image": course_image
+            "course_image": course_image,
+            "is_free": final_is_free,
+            "amount": final_amount
         }), 201
 
     except Exception as e:
