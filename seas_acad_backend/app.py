@@ -1843,38 +1843,70 @@ def toggle_continuous_assessment(course_id):
     ca_percentage = data.get("ca_percentage", 60)
     exam_percentage = data.get("exam_percentage", 40)
 
+    print(f"🔧 Toggle CA for Course {course_id}:")
+    print(f"  Enabled: {enabled}")
+    print(f"  CA %: {ca_percentage}, Exam %: {exam_percentage}")
+
     if enabled is None:
         return jsonify({"message": "Missing 'enabled' (true/false)"}), 400
 
     # Validate percentages
     if ca_percentage + exam_percentage != 100:
-        return jsonify({"message": "CA and Exam percentages must add up to 100"}), 400
+        return jsonify({"message": f"CA and Exam percentages must add up to 100 (got {ca_percentage} + {exam_percentage} = {ca_percentage + exam_percentage})"}), 400
 
     try:
         # Check if course exists
-        course = run_query("SELECT id, title FROM courses WHERE id=%s", (course_id,), fetchone=True)
+        course = run_query(
+            "SELECT id, title, continuous_assessment_enabled, ca_percentage, exam_percentage FROM courses WHERE id=%s", 
+            (course_id,), 
+            fetchone=True
+        )
         if not course:
             return jsonify({"message": "Course not found"}), 404
 
-        # Update continuous assessment settings
-        run_query(
-            """UPDATE courses 
-               SET continuous_assessment_enabled=%s, ca_percentage=%s, exam_percentage=%s 
-               WHERE id=%s""",
-            (bool(enabled), ca_percentage, exam_percentage, course_id),
-            commit=True
+        print(f"📋 Current state: CA={course['continuous_assessment_enabled']}, CA%={course['ca_percentage']}, Exam%={course['exam_percentage']}")
+
+        # FORCE UPDATE with explicit values
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            UPDATE courses 
+            SET continuous_assessment_enabled = %s,
+                ca_percentage = %s,
+                exam_percentage = %s
+            WHERE id = %s
+        """, (1 if enabled else 0, int(ca_percentage), int(exam_percentage), course_id))
+        
+        conn.commit()
+        rows_affected = cursor.rowcount
+        cursor.close()
+        conn.close()
+
+        print(f"✅ Update complete. Rows affected: {rows_affected}")
+
+        # VERIFY the update worked
+        verify = run_query(
+            "SELECT continuous_assessment_enabled, ca_percentage, exam_percentage FROM courses WHERE id=%s",
+            (course_id,),
+            fetchone=True
         )
+        print(f"🔍 Verified state: CA={verify['continuous_assessment_enabled']}, CA%={verify['ca_percentage']}, Exam%={verify['exam_percentage']}")
 
         status = "enabled" if enabled else "disabled"
         return jsonify({
             "message": f"Continuous Assessment {status} successfully",
-            "continuous_assessment_enabled": enabled,
-            "ca_percentage": ca_percentage,
-            "exam_percentage": exam_percentage
+            "continuous_assessment_enabled": bool(enabled),
+            "ca_percentage": int(ca_percentage),
+            "exam_percentage": int(exam_percentage),
+            "verified": verify  # Include verification in response
         }), 200
 
     except Exception as e:
         current_app.logger.exception("Error toggling continuous assessment")
+        print(f"❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"message": "Error updating settings", "error": str(e)}), 500
 
 
