@@ -2101,6 +2101,92 @@ def _submit_final_exam_internally(user_id, course_id, score, max_score):
     except Exception as e:
         current_app.logger.exception("Error submitting final exam internally")
 
+
+
+
+@app.route("/api/admin/migrate_quiz_ids", methods=["POST"])
+@login_required
+def migrate_quiz_ids():
+    """Add quiz_id to all existing quizzes that don't have one"""
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+        
+        # Get all modules
+        cursor.execute("SELECT id, course_id, content FROM modules")
+        modules = cursor.fetchall()
+        
+        updated_count = 0
+        
+        for module in modules:
+            module_id = module['id']
+            course_id = module['course_id']
+            content = module.get('content')
+            
+            if not content:
+                continue
+                
+            # Parse JSON content
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except:
+                    print(f"❌ Failed to parse content for module {module_id}")
+                    continue
+            
+            if not isinstance(content, list):
+                continue
+            
+            modified = False
+            
+            # Process each subtitle
+            for subtitle_index, subtitle in enumerate(content):
+                if not isinstance(subtitle, dict):
+                    continue
+                
+                contents = subtitle.get('contents', [])
+                
+                for content_item in contents:
+                    if content_item.get('type') == 'quiz':
+                        quiz_data = content_item.get('data', {})
+                        
+                        # ✅ Add quiz_id if missing
+                        if 'quiz_id' not in quiz_data or not quiz_data['quiz_id']:
+                            quiz_data['quiz_id'] = f"quiz_{module_id}_{subtitle_index}"
+                            modified = True
+                            updated_count += 1
+                            print(f"✅ Added quiz_id: quiz_{module_id}_{subtitle_index} to course {course_id}")
+            
+            # Update module if modified
+            if modified:
+                cursor.execute(
+                    "UPDATE modules SET content = %s WHERE id = %s",
+                    (json.dumps(content, ensure_ascii=False), module_id)
+                )
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print(f"🎉 Migration complete! Updated {updated_count} quizzes")
+        
+        return jsonify({
+            "message": "Quiz IDs migration complete",
+            "quizzes_updated": updated_count
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Migration error: {e}")
+        import traceback
+        traceback.print_exc()
+        current_app.logger.exception("Error migrating quiz IDs")
+        return jsonify({"message": "Error migrating quiz IDs", "error": str(e)}), 500
+    
+    
+    
 # Change the endpoint from GET to POST and update logic
 @app.route("/api/user/quiz_attempts/<int:course_id>/<string:quiz_id>", methods=["POST"])
 @login_required
