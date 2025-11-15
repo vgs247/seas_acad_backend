@@ -853,19 +853,54 @@ def add_module():
             return jsonify({"message": "Invalid JSON format for subtitles"}), 400
 
     try:
-        # Store all subtitles and their content in one JSON column
-        run_query("""
+        # ✅ STEP 1: Insert module first to get module_id
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
             INSERT INTO modules (course_id, module_number, module_title, content)
             VALUES (%s, %s, %s, %s)
         """, (
             data["course_id"],
             data["module_number"],
             data["module_title"],
-            json.dumps(subtitles, ensure_ascii=False)
-        ), commit=True)
+            json.dumps([])  # Empty first, will update below
+        ))
+        
+        module_id = cursor.lastrowid
+        print(f"✅ Created module with ID: {module_id}")
+        
+        # ✅ STEP 2: Process subtitles and add quiz_id to any quizzes
+        if isinstance(subtitles, list):
+            for subtitle_index, subtitle in enumerate(subtitles):
+                if not isinstance(subtitle, dict):
+                    continue
+                    
+                contents = subtitle.get('contents', [])
+                
+                for content_item in contents:
+                    if content_item.get('type') == 'quiz':
+                        quiz_data = content_item.get('data', {})
+                        
+                        # Generate quiz_id if missing
+                        if 'quiz_id' not in quiz_data or not quiz_data['quiz_id']:
+                            quiz_data['quiz_id'] = f"quiz_{module_id}_{subtitle_index}"
+                            print(f"✅ Generated quiz_id: quiz_{module_id}_{subtitle_index}")
+        
+        # ✅ STEP 3: Update module with processed content (now with quiz_ids)
+        cursor.execute("""
+            UPDATE modules SET content = %s WHERE id = %s
+        """, (json.dumps(subtitles, ensure_ascii=False), module_id))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        print(f"🎉 Module {module_id} created successfully with quiz IDs")
 
         return jsonify({
             "message": "Module created successfully",
+            "module_id": module_id,
             "data": {
                 "course_id": data["course_id"],
                 "module_number": data["module_number"],
@@ -875,6 +910,9 @@ def add_module():
         }), 201
 
     except Exception as e:
+        print(f"❌ Error creating module: {e}")
+        import traceback
+        traceback.print_exc()
         current_app.logger.exception("Error creating module")
         return jsonify({"message": "Error creating module", "error": str(e)}), 500
 
