@@ -2066,11 +2066,15 @@ def submit_quiz_score():
 
 
 
-@app.route("/api/user/quiz_attempts/<int:course_id>/<string:quiz_id>", methods=["GET"])
+# Change the endpoint from GET to POST and update logic
+@app.route("/api/user/quiz_attempts/<int:course_id>/<string:quiz_id>", methods=["POST"])
 @login_required
 def get_quiz_attempt_status(course_id, quiz_id):
     """Check how many attempts a user has left for a specific quiz"""
     try:
+        data = request.get_json() or {}
+        max_attempts_from_quiz = data.get("max_attempts")  # ← GET FROM REQUEST
+        
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
 
@@ -2104,23 +2108,40 @@ def get_quiz_attempt_status(course_id, quiz_id):
         
         attempts_history = cursor.fetchall()
 
-        cursor.close()
-        conn.close()
-
         if not attempt_data:
             # User hasn't attempted this quiz yet
+            # ← USE max_attempts FROM QUIZ DATA
+            cursor.close()
+            conn.close()
+            
             return jsonify({
                 "has_attempted": False,
                 "attempts_used": 0,
-                "max_attempts": None,  # Will be set when quiz is loaded
+                "max_attempts": max_attempts_from_quiz,  # ← USE THIS
                 "can_attempt": True,
-                "attempts_remaining": None,  # Unlimited until we know max_attempts
+                "attempts_remaining": max_attempts_from_quiz if max_attempts_from_quiz else None,
                 "attempts_history": []
             }), 200
 
-        # Calculate remaining attempts
+        # ← UPDATE: If max_attempts changed in quiz, update the record
+        stored_max_attempts = attempt_data['max_attempts']
+        if max_attempts_from_quiz != stored_max_attempts:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE quiz_scores 
+                SET max_attempts = %s 
+                WHERE user_id=%s AND course_id=%s AND quiz_id=%s
+            """, (max_attempts_from_quiz, g.user_id, course_id, quiz_id))
+            conn.commit()
+            cursor.close()
+            stored_max_attempts = max_attempts_from_quiz
+
+        cursor.close()
+        conn.close()
+
+        # Calculate remaining attempts using updated value
         attempts_used = attempt_data['attempt_count']
-        max_attempts = attempt_data['max_attempts']
+        max_attempts = stored_max_attempts
         
         can_attempt = True
         attempts_remaining = None
@@ -2146,7 +2167,8 @@ def get_quiz_attempt_status(course_id, quiz_id):
         current_app.logger.exception("Error checking quiz attempts")
         return jsonify({"message": "Error checking quiz attempts", "error": str(e)}), 500
     
-
+    
+    
 @app.route("/api/user/final_exam_score", methods=["POST"])
 @login_required
 def submit_final_exam_score():
