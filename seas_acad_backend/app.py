@@ -1743,8 +1743,8 @@ def enable_2fa():
         # Generate provisioning URI for Google Authenticator
         totp = pyotp.TOTP(secret)
         uri = totp.provisioning_uri(
-            name=user["email"] or user["username"],
-            issuer_name="MyAcademy"
+        
+            issuer_name="SEA Security Academy"
         )
         
         # Generate QR code
