@@ -2021,9 +2021,9 @@ def submit_quiz_score():
         fetchone=True
     )
     
-    if course and bool(course["continuous_assessment_enabled"]):
-        _update_ca_score(g.user_id, course_id)
-        _update_final_grade(g.user_id, course_id)
+       if course and bool(course["continuous_assessment_enabled"]):
+         _update_ca_score(g.user_id, course_id)
+         _update_final_grade(g.user_id, course_id)
     else:
     # For final exam, update exam score and recalculate
         _submit_final_exam_internally(g.user_id, course_id, score, max_score)
