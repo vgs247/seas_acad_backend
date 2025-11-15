@@ -885,9 +885,9 @@ def add_module():
                         # Generate quiz_id if missing
                         if 'quiz_id' not in quiz_data or not quiz_data['quiz_id']:
                             quiz_data['quiz_id'] = f"quiz_{module_id}_{subtitle_index}"
-                            print(f"✅ Generated quiz_id: quiz_{module_id}_{subtitle_index}")
+                            print(f"Generated quiz_id: quiz_{module_id}_{subtitle_index}")
         
-        # ✅ STEP 3: Update module with processed content (now with quiz_ids)
+        # STEP 3: Update module with processed content (now with quiz_ids)
         cursor.execute("""
             UPDATE modules SET content = %s WHERE id = %s
         """, (json.dumps(subtitles, ensure_ascii=False), module_id))
@@ -896,7 +896,7 @@ def add_module():
         cursor.close()
         conn.close()
 
-        print(f"🎉 Module {module_id} created successfully with quiz IDs")
+        print(f"Module {module_id} created successfully with quiz IDs")
 
         return jsonify({
             "message": "Module created successfully",
@@ -2111,14 +2111,22 @@ def submit_quiz_score():
         current_app.logger.exception("Error submitting quiz score")
         return jsonify({"message": "Error submitting quiz score", "error": str(e)}), 500
 
-
 def _submit_final_exam_internally(user_id, course_id, score, max_score):
     """Internal function to submit final exam score"""
     try:
-        percentage = (float(score) / float(max_score)) * 100 if max_score > 0 else 0.0  # ✅ Ensure float
+        percentage = (float(score) / float(max_score)) * 100 if max_score > 0 else 0.0
 
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # ✅ Check if CA is enabled for this course
+        cursor.execute("""
+            SELECT continuous_assessment_enabled 
+            FROM courses 
+            WHERE id=%s
+        """, (course_id,))
+        course = cursor.fetchone()
+        ca_enabled = bool(course["continuous_assessment_enabled"]) if course else False
 
         cursor.execute("""
             INSERT INTO final_exam_scores 
@@ -2132,6 +2140,9 @@ def _submit_final_exam_internally(user_id, course_id, score, max_score):
         conn.commit()
         cursor.close()
         conn.close()
+
+        #  Log for debugging
+        print(f"Final exam submitted: User={user_id}, Course={course_id}, Score={percentage}%, CA_Enabled={ca_enabled}")
 
         # Recalculate final grade
         _update_final_grade(user_id, course_id)
@@ -2419,10 +2430,8 @@ def _update_final_grade(user_id, course_id):
             conn.close()
             return
 
-        ca_enabled = course["continuous_assessment_enabled"]
-        ca_weight = float(course["ca_percentage"]) / 100 if ca_enabled else 0  # ✅ Convert to float
-        exam_weight = float(course["exam_percentage"]) / 100 if ca_enabled else 1  # ✅ Convert to float
-
+        ca_enabled = bool(course["continuous_assessment_enabled"])  # ✅ Ensure boolean
+        
         # Get CA score
         cursor.execute("""
             SELECT AVG(percentage) as avg_score
@@ -2430,7 +2439,7 @@ def _update_final_grade(user_id, course_id):
             WHERE user_id=%s AND course_id=%s
         """, (user_id, course_id))
         ca_result = cursor.fetchone()
-        ca_score = float(ca_result["avg_score"]) if ca_result and ca_result["avg_score"] else 0.0  # ✅ Convert to float
+        ca_score = float(ca_result["avg_score"]) if ca_result and ca_result["avg_score"] else 0.0
 
         # Get exam score
         cursor.execute("""
@@ -2438,13 +2447,18 @@ def _update_final_grade(user_id, course_id):
             WHERE user_id=%s AND course_id=%s
         """, (user_id, course_id))
         exam_result = cursor.fetchone()
-        exam_score = float(exam_result["percentage"]) if exam_result and exam_result["percentage"] else 0.0  # ✅ Convert to float
+        exam_score = float(exam_result["percentage"]) if exam_result and exam_result["percentage"] else 0.0
 
-        # Calculate final score
+        # ✅ FIX: Calculate final score correctly based on CA enabled status
         if ca_enabled:
+            # CA is enabled: use weighted calculation
+            ca_weight = float(course["ca_percentage"]) / 100
+            exam_weight = float(course["exam_percentage"]) / 100
             final_score = (ca_score * ca_weight) + (exam_score * exam_weight)
         else:
+            # CA is NOT enabled: final score = exam score ONLY
             final_score = exam_score
+            ca_score = 0.0  # Force CA to 0 when disabled
 
         # Determine grade
         grade = _calculate_grade(final_score)
@@ -2457,7 +2471,7 @@ def _update_final_grade(user_id, course_id):
         _upsert_course_grade(
             user_id, 
             course_id, 
-            ca_score=ca_score if ca_enabled else 0,
+            ca_score=ca_score if ca_enabled else 0.0,  # ✅ Force 0 if CA disabled
             exam_score=exam_score,
             final_score=final_score,
             grade=grade,
@@ -2466,7 +2480,7 @@ def _update_final_grade(user_id, course_id):
 
     except Exception as e:
         current_app.logger.exception("Error updating final grade")
-
+        
 def _upsert_course_grade(user_id, course_id, ca_score=None, exam_score=None, 
                          final_score=None, grade=None, passed=None):
     """Insert or update course grade"""
