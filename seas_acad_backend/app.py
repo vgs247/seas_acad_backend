@@ -2074,11 +2074,10 @@ def submit_quiz_score():
         return jsonify({"message": "Error submitting quiz score", "error": str(e)}), 500
 
 
-# ✅ ADD THIS helper function
 def _submit_final_exam_internally(user_id, course_id, score, max_score):
     """Internal function to submit final exam score"""
     try:
-        percentage = (score / max_score) * 100 if max_score > 0 else 0
+        percentage = (float(score) / float(max_score)) * 100 if max_score > 0 else 0.0  # ✅ Ensure float
 
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
@@ -2101,7 +2100,6 @@ def _submit_final_exam_internally(user_id, course_id, score, max_score):
 
     except Exception as e:
         current_app.logger.exception("Error submitting final exam internally")
-
 
 # Change the endpoint from GET to POST and update logic
 @app.route("/api/user/quiz_attempts/<int:course_id>/<string:quiz_id>", methods=["POST"])
