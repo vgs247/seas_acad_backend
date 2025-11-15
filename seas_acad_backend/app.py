@@ -2065,6 +2065,88 @@ def submit_quiz_score():
         return jsonify({"message": "Error submitting quiz score", "error": str(e)}), 500
 
 
+
+@app.route("/api/user/quiz_attempts/<int:course_id>/<string:quiz_id>", methods=["GET"])
+@login_required
+def get_quiz_attempt_status(course_id, quiz_id):
+    """Check how many attempts a user has left for a specific quiz"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # Get quiz attempt info
+        cursor.execute("""
+            SELECT 
+                attempt_count,
+                max_attempts,
+                score as best_score,
+                max_score,
+                percentage as best_percentage,
+                completed_at as last_attempt
+            FROM quiz_scores
+            WHERE user_id=%s AND course_id=%s AND quiz_id=%s
+        """, (g.user_id, course_id, quiz_id))
+        
+        attempt_data = cursor.fetchone()
+
+        # Get all individual attempts history
+        cursor.execute("""
+            SELECT 
+                attempt_number,
+                score,
+                max_score,
+                percentage,
+                completed_at
+            FROM quiz_attempts
+            WHERE user_id=%s AND course_id=%s AND quiz_id=%s
+            ORDER BY attempt_number DESC
+        """, (g.user_id, course_id, quiz_id))
+        
+        attempts_history = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        if not attempt_data:
+            # User hasn't attempted this quiz yet
+            return jsonify({
+                "has_attempted": False,
+                "attempts_used": 0,
+                "max_attempts": None,  # Will be set when quiz is loaded
+                "can_attempt": True,
+                "attempts_remaining": None,  # Unlimited until we know max_attempts
+                "attempts_history": []
+            }), 200
+
+        # Calculate remaining attempts
+        attempts_used = attempt_data['attempt_count']
+        max_attempts = attempt_data['max_attempts']
+        
+        can_attempt = True
+        attempts_remaining = None
+        
+        if max_attempts is not None:
+            attempts_remaining = max_attempts - attempts_used
+            can_attempt = attempts_remaining > 0
+
+        return jsonify({
+            "has_attempted": True,
+            "attempts_used": attempts_used,
+            "max_attempts": max_attempts,
+            "can_attempt": can_attempt,
+            "attempts_remaining": attempts_remaining,
+            "best_score": attempt_data['best_score'],
+            "best_max_score": attempt_data['max_score'],
+            "best_percentage": float(attempt_data['best_percentage']) if attempt_data['best_percentage'] else 0,
+            "last_attempt_date": attempt_data['last_attempt'].isoformat() if attempt_data['last_attempt'] else None,
+            "attempts_history": attempts_history
+        }), 200
+
+    except Exception as e:
+        current_app.logger.exception("Error checking quiz attempts")
+        return jsonify({"message": "Error checking quiz attempts", "error": str(e)}), 500
+    
+
 @app.route("/api/user/final_exam_score", methods=["POST"])
 @login_required
 def submit_final_exam_score():
