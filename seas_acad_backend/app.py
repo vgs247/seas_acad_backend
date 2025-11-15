@@ -2012,6 +2012,21 @@ def submit_quiz_score():
     max_score = data.get("max_score")
     max_attempts = data.get("max_attempts")
     is_final_exam = data.get("is_final_exam", False)
+    
+    if not is_final_exam:
+    # Check if CA is enabled before updating CA score
+       course = run_query(
+        "SELECT continuous_assessment_enabled FROM courses WHERE id=%s",
+        (course_id,),
+        fetchone=True
+    )
+    
+    if course and bool(course["continuous_assessment_enabled"]):
+        _update_ca_score(g.user_id, course_id)
+        _update_final_grade(g.user_id, course_id)
+    else:
+    # For final exam, update exam score and recalculate
+        _submit_final_exam_internally(g.user_id, course_id, score, max_score)
 
     if not all([course_id, quiz_id, module_id, subtitle_id, score is not None, max_score]):
         return jsonify({"message": "Missing required fields"}), 400
