@@ -2109,6 +2109,7 @@ def _submit_final_exam_internally(user_id, course_id, score, max_score):
 def get_quiz_attempt_status(course_id, quiz_id):
     """Check how many attempts a user has left for a specific quiz"""
     try:
+       
         data = request.get_json() or {}
         max_attempts_from_quiz = data.get("max_attempts")  # ← GET FROM REQUEST
         
@@ -2267,7 +2268,7 @@ def _update_ca_score(user_id, course_id):
         """, (user_id, course_id))
 
         result = cursor.fetchone()
-        ca_score = result["avg_score"] if result and result["avg_score"] else 0
+        ca_score = float(result["avg_score"]) if result and result["avg_score"] else 0.0  # ✅ Convert to float
 
         cursor.close()
         conn.close()
@@ -2277,7 +2278,6 @@ def _update_ca_score(user_id, course_id):
 
     except Exception as e:
         current_app.logger.exception("Error updating CA score")
-
 
 def _update_final_grade(user_id, course_id):
     """Calculate final grade based on CA and exam scores"""
@@ -2298,8 +2298,8 @@ def _update_final_grade(user_id, course_id):
             return
 
         ca_enabled = course["continuous_assessment_enabled"]
-        ca_weight = course["ca_percentage"] / 100 if ca_enabled else 0
-        exam_weight = course["exam_percentage"] / 100 if ca_enabled else 1
+        ca_weight = float(course["ca_percentage"]) / 100 if ca_enabled else 0  # ✅ Convert to float
+        exam_weight = float(course["exam_percentage"]) / 100 if ca_enabled else 1  # ✅ Convert to float
 
         # Get CA score
         cursor.execute("""
@@ -2308,7 +2308,7 @@ def _update_final_grade(user_id, course_id):
             WHERE user_id=%s AND course_id=%s
         """, (user_id, course_id))
         ca_result = cursor.fetchone()
-        ca_score = ca_result["avg_score"] if ca_result and ca_result["avg_score"] else 0
+        ca_score = float(ca_result["avg_score"]) if ca_result and ca_result["avg_score"] else 0.0  # ✅ Convert to float
 
         # Get exam score
         cursor.execute("""
@@ -2316,7 +2316,7 @@ def _update_final_grade(user_id, course_id):
             WHERE user_id=%s AND course_id=%s
         """, (user_id, course_id))
         exam_result = cursor.fetchone()
-        exam_score = exam_result["percentage"] if exam_result else 0
+        exam_score = float(exam_result["percentage"]) if exam_result and exam_result["percentage"] else 0.0  # ✅ Convert to float
 
         # Calculate final score
         if ca_enabled:
@@ -2344,7 +2344,6 @@ def _update_final_grade(user_id, course_id):
 
     except Exception as e:
         current_app.logger.exception("Error updating final grade")
-
 
 def _upsert_course_grade(user_id, course_id, ca_score=None, exam_score=None, 
                          final_score=None, grade=None, passed=None):
