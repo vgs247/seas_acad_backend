@@ -1972,7 +1972,7 @@ def submit_quiz_score():
     subtitle_id = data.get("subtitle_id")
     score = data.get("score")
     max_score = data.get("max_score")
-    max_attempts = data.get("max_attempts")  # ← NEW: from quiz definition
+    max_attempts = data.get("max_attempts")
     is_final_exam = data.get("is_final_exam", False)
 
     if not all([course_id, quiz_id, module_id, subtitle_id, score is not None, max_score]):
@@ -2046,6 +2046,14 @@ def submit_quiz_score():
         cursor.close()
         conn.close()
 
+        # ✅ ADD THIS: Recalculate grades after quiz submission
+        if not is_final_exam:
+            _update_ca_score(g.user_id, course_id)
+            _update_final_grade(g.user_id, course_id)
+        else:
+            # For final exam, update exam score and recalculate
+            _submit_final_exam_internally(g.user_id, course_id, score, max_score)
+
         # Calculate remaining attempts
         remaining = None
         if max_attempts is not None:
@@ -2057,13 +2065,42 @@ def submit_quiz_score():
             "max_score": max_score,
             "percentage": percentage,
             "attempt_number": new_attempt_count,
-            "attempts_remaining": remaining
+            "attempts_remaining": remaining,
+            "grade_updated": True  # ← Signal that grades were recalculated
         }), 200
 
     except Exception as e:
         current_app.logger.exception("Error submitting quiz score")
         return jsonify({"message": "Error submitting quiz score", "error": str(e)}), 500
 
+
+# ✅ ADD THIS helper function
+def _submit_final_exam_internally(user_id, course_id, score, max_score):
+    """Internal function to submit final exam score"""
+    try:
+        percentage = (score / max_score) * 100 if max_score > 0 else 0
+
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        cursor.execute("""
+            INSERT INTO final_exam_scores 
+            (user_id, course_id, score, max_score, percentage)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE 
+            score=%s, max_score=%s, percentage=%s, completed_at=CURRENT_TIMESTAMP
+        """, (user_id, course_id, score, max_score, percentage,
+              score, max_score, percentage))
+
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        # Recalculate final grade
+        _update_final_grade(user_id, course_id)
+
+    except Exception as e:
+        current_app.logger.exception("Error submitting final exam internally")
 
 
 # Change the endpoint from GET to POST and update logic
