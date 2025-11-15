@@ -379,12 +379,28 @@ def list_published_courses():
         conn = get_db_connection()
         cursor = conn.cursor(pymysql.cursors.DictCursor)
 
-        cursor.execute("SELECT * FROM courses WHERE is_published = TRUE ORDER BY created_at DESC")
+        # Fetch published courses
+        cursor.execute("""
+            SELECT * FROM courses 
+            WHERE is_published = TRUE 
+            ORDER BY created_at DESC
+        """)
         courses = cursor.fetchall()
 
-        # Convert is_published from 1/0 → True/False
+        # Fetch module counts for all courses
+        cursor.execute("""
+            SELECT course_id, COUNT(*) AS cnt 
+            FROM modules 
+            GROUP BY course_id
+        """)
+        counts = {row["course_id"]: row["cnt"] for row in cursor.fetchall()}
+
+        # Process each course
         for course in courses:
             course["is_published"] = bool(course.get("is_published"))
+            course["is_free"] = bool(course.get("is_free"))
+            course["continuous_assessment_enabled"] = bool(course.get("continuous_assessment_enabled", 0))
+            course["num_lessons"] = counts.get(course["id"], 0)  # Add module count
 
         cursor.close()
         conn.close()
@@ -393,7 +409,6 @@ def list_published_courses():
     except Exception as e:
         current_app.logger.exception("Error listing published courses")
         return jsonify({"message": "Internal Server Error", "error": str(e)}), 500
-
     
     
 @app.route("/api/courses/<int:course_id>/publish", methods=["PATCH"])
