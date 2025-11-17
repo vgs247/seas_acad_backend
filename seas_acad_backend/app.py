@@ -825,6 +825,7 @@ def featured_courses():
     return jsonify(rows)
 
 
+# In app.py, update the /api/modules POST endpoint
 
 @app.route("/api/modules", methods=["POST"])
 @login_required
@@ -870,7 +871,7 @@ def add_module():
         module_id = cursor.lastrowid
         print(f"✅ Created module with ID: {module_id}")
         
-        # ✅ STEP 2: Process subtitles and add quiz_id to any quizzes
+        # ✅ STEP 2: Process subtitles and add quiz_id to ALL quizzes
         if isinstance(subtitles, list):
             for subtitle_index, subtitle in enumerate(subtitles):
                 if not isinstance(subtitle, dict):
@@ -878,14 +879,16 @@ def add_module():
                     
                 contents = subtitle.get('contents', [])
                 
-                for content_item in contents:
+                for content_index, content_item in enumerate(contents):
                     if content_item.get('type') == 'quiz':
                         quiz_data = content_item.get('data', {})
                         
-                        # Generate quiz_id if missing
-                        if 'quiz_id' not in quiz_data or not quiz_data['quiz_id']:
-                            quiz_data['quiz_id'] = f"quiz_{module_id}_{subtitle_index}"
-                            print(f"Generated quiz_id: quiz_{module_id}_{subtitle_index}")
+                        # ALWAYS generate quiz_id if missing or empty
+                        if not quiz_data.get('quiz_id'):
+                            quiz_data['quiz_id'] = f"quiz_{module_id}_{subtitle_index}_{content_index}"
+                            print(f" Generated quiz_id: {quiz_data['quiz_id']}")
+                        else:
+                            print(f" Quiz already has ID: {quiz_data['quiz_id']}")
         
         # STEP 3: Update module with processed content (now with quiz_ids)
         cursor.execute("""
@@ -917,6 +920,99 @@ def add_module():
         return jsonify({"message": "Error creating module", "error": str(e)}), 500
 
 
+
+# Add this endpoint to app.py - run it ONCE to fix all existing quizzes
+
+@app.route("/api/admin/fix_all_quiz_ids", methods=["POST"])
+@login_required
+def fix_all_quiz_ids():
+    """ONE-TIME FIX: Add quiz_id to ALL existing quizzes"""
+    if not getattr(g, "is_admin", False):
+        return jsonify({"message": "admin only"}), 403
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+        
+        # Get all modules
+        cursor.execute("SELECT id, course_id, content FROM modules")
+        modules = cursor.fetchall()
+        
+        fixed_count = 0
+        total_quizzes = 0
+        
+        for module in modules:
+            module_id = module['id']
+            course_id = module['course_id']
+            content = module.get('content')
+            
+            if not content:
+                continue
+                
+            # Parse JSON content
+            if isinstance(content, str):
+                try:
+                    content = json.loads(content)
+                except:
+                    print(f"❌ Failed to parse content for module {module_id}")
+                    continue
+            
+            if not isinstance(content, list):
+                continue
+            
+            modified = False
+            
+            # Process each subtitle
+            for subtitle_index, subtitle in enumerate(content):
+                if not isinstance(subtitle, dict):
+                    continue
+                
+                contents = subtitle.get('contents', [])
+                
+                for content_index, content_item in enumerate(contents):
+                    if content_item.get('type') == 'quiz':
+                        total_quizzes += 1
+                        quiz_data = content_item.get('data', {})
+                        
+                        # ✅ Fix: Add quiz_id if missing OR empty
+                        current_id = quiz_data.get('quiz_id')
+                        if not current_id or current_id.strip() == '':
+                            new_id = f"quiz_{module_id}_{subtitle_index}_{content_index}"
+                            quiz_data['quiz_id'] = new_id
+                            modified = True
+                            fixed_count += 1
+                            print(f"Fixed quiz in module {module_id}, subtitle {subtitle_index}: {new_id}")
+                        else:
+                            print(f" Quiz already has valid ID: {current_id}")
+            
+            # Update module if modified
+            if modified:
+                cursor.execute(
+                    "UPDATE modules SET content = %s WHERE id = %s",
+                    (json.dumps(content, ensure_ascii=False), module_id)
+                )
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        print(f"Fix complete! Fixed {fixed_count} out of {total_quizzes} quizzes")
+        
+        return jsonify({
+            "message": "Quiz IDs fixed successfully",
+            "total_quizzes": total_quizzes,
+            "quizzes_fixed": fixed_count,
+            "already_had_ids": total_quizzes - fixed_count
+        }), 200
+        
+    except Exception as e:
+        print(f"Fix error: {e}")
+        import traceback
+        traceback.print_exc()
+        current_app.logger.exception("Error fixing quiz IDs")
+        return jsonify({"message": "Error fixing quiz IDs", "error": str(e)}), 500
+    
+    
 @app.route("/api/user/modules/<int:course_id>", methods=["GET"])
 @login_required
 def get_user_course_modules(course_id):
